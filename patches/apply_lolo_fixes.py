@@ -162,8 +162,8 @@ java.write_text(s)
 print("Patch script ready")
 
 
-// Follow-up refinements: preserve the selected icon, avoid UI polling, and
-// make navigation/WebView interactions lighter without changing app features.
+# Follow-up refinements: preserve the selected icon, avoid UI polling, and
+# make navigation/WebView interactions lighter without changing app features.
 def patch_if_present(path, old, new):
     p = Path(path)
     s = p.read_text()
