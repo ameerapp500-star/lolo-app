@@ -1,0 +1,49 @@
+name: Build Lolo APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download project source
+        run: |
+          curl -fL "https://raw.githubusercontent.com/ameerapp500-star/lolo-app/main/ameer-screens-fixed.zip" -o /tmp/lolo-source.zip
+          unzip -o /tmp/lolo-source.zip -d /tmp/lolo-source
+          cp -a /tmp/lolo-source/. .
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Validate JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path("app/src/main/assets/index.html").read_text()
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+          if scripts:
+              Path("/tmp/lolo-check.js").write_text("\n".join(scripts))
+          PY
+          if [ -f /tmp/lolo-check.js ]; then node --check /tmp/lolo-check.js; fi
+      - name: Build APK
+        run: gradle :app:assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lolo-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
