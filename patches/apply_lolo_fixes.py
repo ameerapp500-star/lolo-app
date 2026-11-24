@@ -160,3 +160,48 @@ if old not in s: raise SystemExit("Java folder save context not found")
 s = s.replace(old, new, 1)
 java.write_text(s)
 print("Patch script ready")
+
+
+// Follow-up refinements: preserve the selected icon, avoid UI polling, and
+// make navigation/WebView interactions lighter without changing app features.
+def patch_if_present(path, old, new):
+    p = Path(path)
+    s = p.read_text()
+    if new in s:
+        return
+    if old not in s:
+        raise SystemExit("Follow-up patch context not found: " + str(path) + " :: " + old[:90])
+    p.write_text(s.replace(old, new, 1))
+
+html_path = "app/src/main/assets/index.html"
+patch_if_present(html_path,
+    "['kids','أطفال'],['apps','التطبيقات']",
+    "['kids','أطفال'],['maps','الخرائط'],['apps','التطبيقات']")
+patch_if_present(html_path,
+    "  sel.value='tv';\n  renderFiles();",
+    "  if(!sel.value)sel.value='tv';\n  renderFiles();")
+patch_if_present(html_path,
+    "function carBack(){if($('app').style.display==='none')return;if(cur==='files'&&FP.length){FP.pop();renderFiles();return}if(cur==='radio'&&$('rl').querySelector('button')){radioCountries();return}home()}",
+    "function carBack(){if($('app').style.display==='none')return false;if(cur==='files'&&FP.length){FP.pop();renderFiles();return true}if(cur==='radio'&&$('rl').querySelector('button')){radioCountries();return true}home();return true}")
+patch_if_present(html_path,
+    "if(A.consumeM3u&&!window.__ameerM3uPoll){window.__ameerM3uPoll=true;setInterval(()=>{try{const t=A.consumeM3u();if(t&&t.length)addList(parseM3u(t));}catch(e){}},500);}",
+    "function onM3uPicked(){try{const t=A.consumeM3u?A.consumeM3u():'';if(t&&t.length)addList(parseM3u(t));}catch(e){alert('تعذّر قراءة ملف M3U')}}")
+
+java_path = "app/src/main/java/com/carscreens/app/MainActivity.java"
+patch_if_present(java_path,
+    "    s.setAllowFileAccess(true); s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);",
+    "    s.setAllowFileAccess(true); s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);\n    s.setSupportZoom(false); s.setBuiltInZoomControls(false); s.setDisplayZoomControls(false);\n    s.setTextZoom(100);\n    if (Build.VERSION.SDK_INT >= 23) s.setOffscreenPreRaster(true);\n    w.setVerticalScrollBarEnabled(false); w.setHorizontalScrollBarEnabled(false);\n    w.setOverScrollMode(View.OVER_SCROLL_NEVER);")
+patch_if_present(java_path,
+    "    getSharedPreferences(\"ameer_m3u\", MODE_PRIVATE).edit().putString(\"pending\", playlist).apply();\n    if (m3uPickerOnly) finish();",
+    "    getSharedPreferences(\"ameer_m3u\", MODE_PRIVATE).edit().putString(\"pending\", playlist).apply();\n    if (m3uPickerOnly) finish();\n    else if (w != null) w.post(() -> w.evaluateJavascript(\"onM3uPicked()\", null));")
+patch_if_present(java_path,
+    "        sp.edit().putString(\"l\", n.toString()).apply();",
+    "        sp.edit().putString(\"l\", n.toString()).apply();\n        SharedPreferences as = getSharedPreferences(\"folder_assignments\", MODE_PRIVATE);\n        JSONObject map = new JSONObject(as.getString(\"map\", \"{}\"));\n        JSONObject cleaned = new JSONObject();\n        java.util.Iterator<String> names = map.keys();\n        while (names.hasNext()) {\n          String key = names.next(); JSONArray assigned = map.optJSONArray(key); JSONArray kept = new JSONArray();\n          if (assigned != null) for (int j = 0; j < assigned.length(); j++) if (!t.equals(assigned.optString(j))) kept.put(assigned.opt(j));\n          cleaned.put(key, kept);\n        }\n        as.edit().putString(\"map\", cleaned.toString()).apply();")
+patch_if_present(java_path,
+    '''    w.evaluateJavascript("(function(){var a=document.getElementById('app');if(a&&a.style.display!=='none'){home();return 1}return 0})()", new ValueCallback<String>() {
+      public void onReceiveValue(String v) { if (!"1".equals(v)) finish(); }
+    });''',
+    '''    if (w == null) { finish(); return; }
+    w.evaluateJavascript("carBack()", new ValueCallback<String>() {
+      public void onReceiveValue(String v) { if ("false".equals(v) || "null".equals(v)) finish(); }
+    });''')
