@@ -19,6 +19,8 @@ jobs:
           curl -fL "https://raw.githubusercontent.com/ameerapp500-star/lolo-app/main/ameer-screens-fixed.zip" -o /tmp/lolo-source.zip
           unzip -o /tmp/lolo-source.zip -d /tmp/lolo-source
           cp -a /tmp/lolo-source/. .
+      - name: Apply requested Lolo fixes
+        run: python3 patches/apply_lolo_fixes.py
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
