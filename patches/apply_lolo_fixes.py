@@ -297,3 +297,22 @@ patch_if_present(car_screen_path,
     "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());\n        template.setPanModeListener((isInPanMode) -> {});")
 
 print("Android Auto media launcher registration applied for " + service_class)
+
+
+# Allow the Android Auto host to bind to this debug APK during device testing.
+# Release builds keep the official Android Auto host signature allowlist.
+service_path = "app/src/main/java/com/carscreens/app/MapsCarAppService.java"
+patch_if_present(service_path,
+    """  public HostValidator createHostValidator() {
+    return new HostValidator.Builder(this)
+        .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
+        .build();
+  }""",
+    """  public HostValidator createHostValidator() {
+    if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+      return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR;
+    }
+    return new HostValidator.Builder(this)
+        .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
+        .build();
+  }""")
