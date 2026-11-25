@@ -246,6 +246,11 @@ for source in Path("app/src/main").rglob("*.kt"):
             break
 
 if not service_class:
+    print("DEBUG MANIFEST\\n" + manifest_path.read_text())
+    for source in Path("app/src/main/java").rglob("*.java"):
+        data = source.read_text(errors="ignore")
+        if "Service" in source.name or "Media" in data or "extends" in data:
+            print("DEBUG SOURCE " + str(source) + "\\n" + data[:9000])
     raise SystemExit("No existing MediaBrowserService implementation found; refusing to add a fake Android Auto service")
 
 # Add the required Android Auto media-app descriptor metadata.
