@@ -205,3 +205,88 @@ patch_if_present(java_path,
     w.evaluateJavascript("carBack()", new ValueCallback<String>() {
       public void onReceiveValue(String v) { if ("false".equals(v) || "null".equals(v)) finish(); }
     });''')
+
+
+# Android Auto launcher visibility: register the existing media browser service
+# without changing app screens, playback logic, or other application features.
+import re
+import xml.etree.ElementTree as ET
+
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+ET.register_namespace("android", ANDROID_NS)
+A = "{%s}" % ANDROID_NS
+
+manifest_path = Path("app/src/main/AndroidManifest.xml")
+if not manifest_path.exists():
+    raise SystemExit("AndroidManifest.xml not found; cannot safely register Android Auto")
+
+manifest_tree = ET.parse(manifest_path)
+manifest = manifest_tree.getroot()
+application = manifest.find("application")
+if application is None:
+    raise SystemExit("AndroidManifest.xml has no application element")
+
+# Find the real MediaBrowserService implementation in the existing source.
+service_class = None
+for source in Path("app/src/main").rglob("*.java"):
+    source_text = source.read_text(errors="ignore")
+    if re.search(r"extends\\s+(?:androidx\\.media\\.MediaBrowserServiceCompat|MediaBrowserServiceCompat|android\\.service\\.media\\.MediaBrowserService)", source_text):
+        package_match = re.search(r"^\\s*package\\s+([\\w.]+)\\s*;", source_text, re.M)
+        class_match = re.search(r"\\bclass\\s+(\\w+)", source_text)
+        if package_match and class_match:
+            service_class = package_match.group(1) + "." + class_match.group(1)
+            break
+for source in Path("app/src/main").rglob("*.kt"):
+    source_text = source.read_text(errors="ignore")
+    if re.search(r":\\s*(?:MediaBrowserServiceCompat|MediaBrowserService)\\b", source_text):
+        package_match = re.search(r"^\\s*package\\s+([\\w.]+)\\s*$", source_text, re.M)
+        class_match = re.search(r"\\bclass\\s+(\\w+)", source_text)
+        if package_match and class_match:
+            service_class = package_match.group(1) + "." + class_match.group(1)
+            break
+
+if not service_class:
+    raise SystemExit("No existing MediaBrowserService implementation found; refusing to add a fake Android Auto service")
+
+# Add the required Android Auto media-app descriptor metadata.
+meta_name = "com.google.android.gms.car.application"
+meta = next((x for x in application.findall("meta-data") if x.get(A + "name") == meta_name), None)
+if meta is None:
+    meta = ET.SubElement(application, "meta-data")
+    meta.set(A + "name", meta_name)
+meta.set(A + "resource", "@xml/automotive_app_desc")
+meta.attrib.pop(A + "value", None)
+
+# Register the existing media browser service and its Android Auto intent action.
+resolved_service = service_class
+service_node = None
+for node in application.findall("service"):
+    name = node.get(A + "name", "")
+    if name in (resolved_service, "." + resolved_service.split(".")[-1]) or name.endswith("." + resolved_service.split(".")[-1]):
+        service_node = node
+        break
+if service_node is None:
+    service_node = ET.SubElement(application, "service")
+    service_node.set(A + "name", resolved_service)
+service_node.set(A + "exported", "true")
+service_node.set(A + "foregroundServiceType", "mediaPlayback")
+has_action = any(
+    action.get(A + "name") == "android.media.browse.MediaBrowserService"
+    for intent_filter in service_node.findall("intent-filter")
+    for action in intent_filter.findall("action")
+)
+if not has_action:
+    intent_filter = ET.SubElement(service_node, "intent-filter")
+    ET.SubElement(intent_filter, "action").set(A + "name", "android.media.browse.MediaBrowserService")
+
+# Required foreground-service permissions for modern Android versions.
+for permission in ("android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"):
+    if not any(x.get(A + "name") == permission for x in manifest.findall("uses-permission")):
+        ET.SubElement(manifest, "uses-permission").set(A + "name", permission)
+
+manifest_tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+
+descriptor = Path("app/src/main/res/xml/automotive_app_desc.xml")
+descriptor.parent.mkdir(parents=True, exist_ok=True)
+descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<automotiveApp>\\n    <uses name="media" />\\n</automotiveApp>\\n')
+print("Android Auto media launcher registration applied for " + service_class)
