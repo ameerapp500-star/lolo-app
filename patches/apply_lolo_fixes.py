@@ -230,17 +230,17 @@ if application is None:
 service_class = None
 for source in Path("app/src/main").rglob("*.java"):
     source_text = source.read_text(errors="ignore")
-    if re.search(r"extends\\s+(?:androidx\\.media\\.MediaBrowserServiceCompat|MediaBrowserServiceCompat|android\\.service\\.media\\.MediaBrowserService|MediaBrowserService)\\b", source_text):
-        package_match = re.search(r"^\\s*package\\s+([\\w.]+)\\s*;", source_text, re.M)
-        class_match = re.search(r"\\bclass\\s+(\\w+)", source_text)
+    if re.search(r"extends\s+(?:androidx\.media\.MediaBrowserServiceCompat|MediaBrowserServiceCompat|android\.service\.media\.MediaBrowserService|MediaBrowserService)\b", source_text):
+        package_match = re.search(r"^\s*package\s+([\w.]+)\s*;", source_text, re.M)
+        class_match = re.search(r"\bclass\s+(\w+)", source_text)
         if package_match and class_match:
             service_class = package_match.group(1) + "." + class_match.group(1)
             break
 for source in Path("app/src/main").rglob("*.kt"):
     source_text = source.read_text(errors="ignore")
-    if re.search(r":\\s*(?:MediaBrowserServiceCompat|MediaBrowserService)\\b", source_text):
-        package_match = re.search(r"^\\s*package\\s+([\\w.]+)\\s*$", source_text, re.M)
-        class_match = re.search(r"\\bclass\\s+(\\w+)", source_text)
+    if re.search(r":\s*(?:MediaBrowserServiceCompat|MediaBrowserService)\b", source_text):
+        package_match = re.search(r"^\s*package\s+([\w.]+)\s*$", source_text, re.M)
+        class_match = re.search(r"\bclass\s+(\w+)", source_text)
         if package_match and class_match:
             service_class = package_match.group(1) + "." + class_match.group(1)
             break
@@ -288,5 +288,5 @@ manifest_tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
 
 descriptor = Path("app/src/main/res/xml/automotive_app_desc.xml")
 descriptor.parent.mkdir(parents=True, exist_ok=True)
-descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<automotiveApp>\\n    <uses name="media" />\\n    <uses name="template" />\\n</automotiveApp>\\n')
+descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\n<automotiveApp>\n    <uses name="media" />\n    <uses name="template" />\n</automotiveApp>\n')
 print("Android Auto media launcher registration applied for " + service_class)
