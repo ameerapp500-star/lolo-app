@@ -294,6 +294,6 @@ descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\n<automotiveApp>\n
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 patch_if_present(car_screen_path,
     "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());",
-    "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());\\n        template.setPanModeListener((isInPanMode) -> {});")
+    "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());\n        template.setPanModeListener((isInPanMode) -> {});")
 
 print("Android Auto media launcher registration applied for " + service_class)
