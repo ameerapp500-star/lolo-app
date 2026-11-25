@@ -21,6 +21,8 @@ jobs:
           cp -a /tmp/lolo-source/. .
       - name: Apply requested Lolo fixes
         run: python3 patches/apply_lolo_fixes.py
+      - name: Capture Android Auto source diagnostics
+        run: python3 patches/diagnose_lolo.py
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -43,6 +45,12 @@ jobs:
           if [ -f /tmp/lolo-check.js ]; then node --check /tmp/lolo-check.js; fi
       - name: Build APK
         run: gradle :app:assembleDebug
+      - name: Upload Android Auto diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lolo-Diagnostics
+          path: /tmp/lolo-diagnostic.txt
+          if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
