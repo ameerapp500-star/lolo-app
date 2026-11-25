@@ -316,3 +316,12 @@ patch_if_present(service_path,
         .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
         .build();
   }""")
+
+# Prevent an unused remote CDN script from blocking the in-car WebView parser.
+# The bundled UI does not reference Hls anywhere; removing it lets local menus
+# initialize immediately even when the car head unit cannot reach cdnjs.
+index_path = Path("app/src/main/assets/index.html")
+index_source = index_path.read_text()
+unused_hls = '<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js"></script>'
+if unused_hls in index_source:
+    index_path.write_text(index_source.replace(unused_hls, "", 1))
