@@ -289,4 +289,11 @@ manifest_tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
 descriptor = Path("app/src/main/res/xml/automotive_app_desc.xml")
 descriptor.parent.mkdir(parents=True, exist_ok=True)
 descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\n<automotiveApp>\n    <uses name="media" />\n    <uses name="template" />\n</automotiveApp>\n')
+
+# Fix the Android Auto NavigationTemplate pan action configuration only.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());",
+    "        template.setMapActionStrip(new ActionStrip.Builder().addAction(Action.PAN).build());\\n        template.setPanModeListener((isInPanMode) -> {});")
+
 print("Android Auto media launcher registration applied for " + service_class)
