@@ -230,7 +230,7 @@ if application is None:
 service_class = None
 for source in Path("app/src/main").rglob("*.java"):
     source_text = source.read_text(errors="ignore")
-    if re.search(r"extends\\s+(?:androidx\\.media\\.MediaBrowserServiceCompat|MediaBrowserServiceCompat|android\\.service\\.media\\.MediaBrowserService)", source_text):
+    if re.search(r"extends\\s+(?:androidx\\.media\\.MediaBrowserServiceCompat|MediaBrowserServiceCompat|android\\.service\\.media\\.MediaBrowserService|MediaBrowserService)\\b", source_text):
         package_match = re.search(r"^\\s*package\\s+([\\w.]+)\\s*;", source_text, re.M)
         class_match = re.search(r"\\bclass\\s+(\\w+)", source_text)
         if package_match and class_match:
@@ -246,11 +246,6 @@ for source in Path("app/src/main").rglob("*.kt"):
             break
 
 if not service_class:
-    print("DEBUG MANIFEST\\n" + manifest_path.read_text())
-    for source in Path("app/src/main/java").rglob("*.java"):
-        data = source.read_text(errors="ignore")
-        if "Service" in source.name or "Media" in data or "extends" in data:
-            print("DEBUG SOURCE " + str(source) + "\\n" + data[:9000])
     raise SystemExit("No existing MediaBrowserService implementation found; refusing to add a fake Android Auto service")
 
 # Add the required Android Auto media-app descriptor metadata.
@@ -293,5 +288,5 @@ manifest_tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
 
 descriptor = Path("app/src/main/res/xml/automotive_app_desc.xml")
 descriptor.parent.mkdir(parents=True, exist_ok=True)
-descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<automotiveApp>\\n    <uses name="media" />\\n</automotiveApp>\\n')
+descriptor.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<automotiveApp>\\n    <uses name="media" />\\n    <uses name="template" />\\n</automotiveApp>\\n')
 print("Android Auto media launcher registration applied for " + service_class)
