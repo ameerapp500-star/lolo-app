@@ -309,6 +309,20 @@ patch_if_present(car_screen_path,
 
 print("Android Auto media launcher registration applied for " + service_class)
 
+# Critical: Presentation requires a virtual display marked as PRESENTATION.
+# The source currently passes flags=0, so Presentation may reject the display
+# and Android Auto remains stuck on its loading/error screen. Fail the build
+# if this exact source context changes instead of silently skipping the fix.
+replace_once(
+    car_screen_path,
+    """      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", surfaceWidth, surfaceHeight,
+          surfaceDpi, surface, 0);""",
+    """      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", surfaceWidth, surfaceHeight,
+          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"""
+)
+
+
 
 # Allow the Android Auto host to bind to this debug APK during device testing.
 # Release builds keep the official Android Auto host signature allowlist.
