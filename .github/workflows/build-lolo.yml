@@ -31,14 +31,43 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
-          s = p.read_text()
-          if s.count(chr(10)) < 10:
-              s = s.replace(chr(92)*2+"r"+chr(92)*2+"n", chr(10))
-              s = s.replace(chr(92)*2+"n", chr(10))
-              s = s.replace(chr(92)+"r"+chr(92)+"n", chr(10))
-              s = s.replace(chr(92)+"n", chr(10))
-          p.write_text(s)
-          print("Java source lines:", s.count(chr(10)), "literal escapes:", s.count(chr(92)+"n"))
+          src = p.read_text()
+          if src.count(chr(10)) < 10:
+              out = []
+              i = 0
+              in_string = False
+              escaped = False
+              while i < len(src):
+                  ch = src[i]
+                  if in_string:
+                      out.append(ch)
+                      if escaped:
+                          escaped = False
+                      elif ch == chr(92):
+                          escaped = True
+                      elif ch == '"':
+                          in_string = False
+                      i += 1
+                      continue
+                  if ch == '"':
+                      in_string = True
+                      out.append(ch)
+                      i += 1
+                      continue
+                  if ch == chr(92) and i + 1 < len(src):
+                      if src[i+1] == 'n':
+                          out.append(chr(10))
+                          i += 2
+                          continue
+                      if src[i+1] == 'r' and i + 3 < len(src) and src[i+2] == chr(92) and src[i+3] == 'n':
+                          out.append(chr(10))
+                          i += 4
+                          continue
+                  out.append(ch)
+                  i += 1
+              src = ''.join(out)
+              p.write_text(src)
+          print("Java real lines:", src.count(chr(10)))
           PY
       - name: Capture Android Auto source diagnostics
         run: python3 patches/diagnose_lolo.py
