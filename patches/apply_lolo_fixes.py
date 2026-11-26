@@ -325,3 +325,21 @@ index_source = index_path.read_text()
 unused_hls = '<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js"></script>'
 if unused_hls in index_source:
     index_path.write_text(index_source.replace(unused_hls, "", 1))
+
+
+# Create all car-surface views with the Presentation display context.
+# A WebView created from CarContext is attached to the phone's default display
+# while its window is hosted by the car virtual display; this can leave the
+# in-car surface stuck/blank while the host keeps showing its loading state.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    """      presentation = new Presentation(getCarContext(), display);
+      web = new WebView(getCarContext()) {""",
+    """      presentation = new Presentation(getCarContext(), display);
+      Context displayContext = presentation.getContext();
+      web = new WebView(displayContext) {""")
+patch_if_present(car_screen_path,
+    """root = new FrameLayout(getCarContext());
+playerView = new PlayerView(getCarContext());""",
+    """root = new FrameLayout(displayContext);
+playerView = new PlayerView(displayContext);""")
