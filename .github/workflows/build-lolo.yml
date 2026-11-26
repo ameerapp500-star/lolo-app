@@ -16,9 +16,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Download project source
         run: |
+          cp patches/apply_lolo_fixes.py /tmp/apply_lolo_fixes.py
+          cp patches/diagnose_lolo.py /tmp/diagnose_lolo.py
           curl -fL "https://raw.githubusercontent.com/ameerapp500-star/lolo-app/main/ameer-screens-fixed.zip" -o /tmp/lolo-source.zip
           unzip -o /tmp/lolo-source.zip -d /tmp/lolo-source
           cp -a /tmp/lolo-source/. .
+          mkdir -p patches
+          cp /tmp/apply_lolo_fixes.py patches/apply_lolo_fixes.py
+          cp /tmp/diagnose_lolo.py patches/diagnose_lolo.py
       - name: Apply requested Lolo fixes
         run: python3 patches/apply_lolo_fixes.py
       - name: Capture Android Auto source diagnostics
