@@ -1,8 +1,11 @@
-name: Build Lolo APK
+
+# Build 72 - phone-to-car remote browser input
+name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,97 +14,1347 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Download project source
-        run: |
-          cp patches/apply_lolo_fixes.py /tmp/apply_lolo_fixes.py
-          cp patches/diagnose_lolo.py /tmp/diagnose_lolo.py
-          curl -fL "https://raw.githubusercontent.com/ameerapp500-star/lolo-app/main/ameer-screens-fixed.zip" -o /tmp/lolo-source.zip
-          unzip -o /tmp/lolo-source.zip -d /tmp/lolo-source
-          cp -a /tmp/lolo-source/. .
-          mkdir -p patches
-          cp /tmp/apply_lolo_fixes.py patches/apply_lolo_fixes.py
-          cp /tmp/diagnose_lolo.py patches/diagnose_lolo.py
-      - name: Apply requested Lolo fixes
-        run: python3 patches/apply_lolo_fixes.py
-      - name: Normalize escaped Java source line endings
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
-          src = p.read_text()
-          if src.count(chr(10)) < 10:
-              out = []
-              i = 0
-              in_string = False
-              escaped = False
-              while i < len(src):
-                  ch = src[i]
-                  if in_string:
-                      out.append(ch)
-                      if escaped:
-                          escaped = False
-                      elif ch == chr(92):
-                          escaped = True
-                      elif ch == '"':
-                          in_string = False
-                      i += 1
-                      continue
-                  if ch == '"':
-                      in_string = True
-                      out.append(ch)
-                      i += 1
-                      continue
-                  if ch == chr(92) and i + 1 < len(src):
-                      if src[i+1] == 'n':
-                          out.append(chr(10))
-                          i += 2
-                          continue
-                      if src[i+1] == 'r' and i + 3 < len(src) and src[i+2] == chr(92) and src[i+3] == 'n':
-                          out.append(chr(10))
-                          i += 4
-                          continue
-                  out.append(ch)
-                  i += 1
-              src = ''.join(out)
-              p.write_text(src)
-          print("Java real lines:", src.count(chr(10)))
-          PY
-      - name: Capture Android Auto source diagnostics
-        run: python3 patches/diagnose_lolo.py
-      - name: Set up Java
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Gradle
+
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Validate JavaScript
+
+      - name: Extract new project
+        run: |
+          Z=$(find . -type f -name 'ameer-screens-fixed.zip' -not -path './.git/*' | head -1)
+          [ -z "$Z" ] && Z=$(find . -type f -name 'ameer-screens-android-auto-ui-update.zip' -not -path './.git/*' | head -1)
+          if [ -z "$Z" ]; then
+            echo "ERROR: no project zip in repository. Zip files found:"
+            find . -name '*.zip' -not -path './.git/*'
+            exit 1
+          fi
+          echo "Using $Z"
+          unzip -q "$Z" -d extracted
+          S=$(find extracted -name settings.gradle | head -1)
+          [ -z "$S" ] && { echo "ERROR: settings.gradle not found inside zip"; find extracted | head -50; exit 1; }
+          D=$(dirname "$S")
+          if [ "$D" != "extracted/car-screens-main" ]; then
+            mv "$D" extracted/_proj && rm -rf extracted/car-screens-main && mv extracted/_proj extracted/car-screens-main
+          fi
+          ls extracted/car-screens-main
+
+      - name: Upload extracted source for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: ameer-screens-test-source
+          path: extracted/car-screens-main/
+          if-no-files-found: error
+
+      - name: Enable AndroidX
+        working-directory: extracted/car-screens-main
+        run: |
+          if grep -q '^android.useAndroidX=' gradle.properties 2>/dev/null; then
+            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' gradle.properties
+          else
+            echo 'android.useAndroidX=true' >> gradle.properties
+          fi
+          if grep -q '^android.enableJetifier=' gradle.properties 2>/dev/null; then
+            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' gradle.properties
+          else
+            echo 'android.enableJetifier=true' >> gradle.properties
+          fi
+
+      - name: Register media service and secure car host validation
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          service = Path("app/src/main/java/com/carscreens/app/MapsCarAppService.java")
+          source = service.read_text()
+          if "createHostValidator(" not in source:
+              source = source.replace(
+                  "import androidx.car.app.CarAppService;",
+                  "import androidx.car.app.CarAppService;\nimport androidx.car.app.validation.HostValidator;"
+              )
+              marker = "  @Override public Session onCreateSession()"
+              method = """  @Override
+            public HostValidator createHostValidator() {
+              return new HostValidator.Builder(this)
+                  .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
+                  .build();
+            }
+
+          """
+              if marker not in source:
+                  raise SystemExit("Car app service insertion point not found")
+              source = source.replace(marker, method + marker, 1)
+              service.write_text(source)
+
+          manifest = Path("app/src/main/AndroidManifest.xml")
+          xml = manifest.read_text()
+          if 'android:name=".AutoService"' not in xml:
+              block = """    <service
+                  android:name=".AutoService"
+                  android:exported="true"
+                  android:permission="android.permission.BIND_MEDIA_BROWSER">
+                  <intent-filter>
+                      <action android:name="android.media.browse.MediaBrowserService" />
+                  </intent-filter>
+              </service>
+          """
+              xml = xml.replace("</application>", block + "  </application>")
+              manifest.write_text(xml)
+          PY
+
+      - name: Add custom Android Auto surface and original web interface
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("app/src/main/AndroidManifest.xml")
+          xml = manifest.read_text()
+          for permission in (
+              '  <uses-permission android:name="androidx.car.app.ACCESS_SURFACE"/>',
+              '  <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>',
+          ):
+              if permission not in xml:
+                  xml = xml.replace('<application ', permission + "\n  <application ", 1)
+          manifest.write_text(xml)
+
+          service = Path("app/src/main/java/com/carscreens/app/MapsCarAppService.java")
+          src = service.read_text()
+          src = src.replace("return new HomeScreen(getCarContext());", "return new CarWebScreen(getCarContext());")
+          service.write_text(src)
+
+          target = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          target.write_text(r'''package com.carscreens.app;
+
+          import android.app.Presentation;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.ResolveInfo;
+          import android.database.Cursor;
+          import android.graphics.Rect;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.util.Log;
+          import android.provider.MediaStore;
+          import android.provider.Settings;
+          import android.view.Display;
+          import android.view.MotionEvent;
+          import android.view.Surface;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.car.app.AppManager;
+          import androidx.car.app.CarContext;
+          import androidx.car.app.Screen;
+          import androidx.car.app.SurfaceCallback;
+          import androidx.car.app.SurfaceContainer;
+          import androidx.car.app.model.Action;
+          import androidx.car.app.model.ActionStrip;
+          import androidx.car.app.model.Template;
+          import androidx.car.app.navigation.model.NavigationTemplate;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          import java.util.Map;
+          import java.util.HashMap;
+
+          /** Renders the existing Ameer Screens HTML interface on Android Auto's navigation surface. */
+          public final class CarWebScreen extends Screen {
+            private final Handler main = new Handler(Looper.getMainLooper());
+            private SurfaceContainer current;
+            private VirtualDisplay virtualDisplay;
+            private Presentation presentation;
+            private WebView web;
+            private int scrollX, scrollY;
+
+            private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+              @Override public void onSurfaceAvailable(SurfaceContainer c) {
+                current = c;
+                main.post(() -> attach(c));
+              }
+              @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+                main.post(() -> detach());
+              }
+              @Override public void onClick(float x, float y) {
+                main.post(() -> dispatchTap(x, y));
+              }
+              @Override public void onScroll(float dx, float dy) {
+                main.post(() -> dispatchDrag(dx, dy));
+              }
+              @Override public void onFling(float vx, float vy) {
+                main.post(() -> dispatchDrag(vx > 0 ? -90 : 90, vy > 0 ? -90 : 90));
+              }
+            };
+
+            CarWebScreen(CarContext context) {
+              super(context);
+              getCarContext().getCarService(AppManager.class).setSurfaceCallback(surfaceCallback);
+            }
+
+            private void attach(SurfaceContainer c) {
+              detach();
+              Surface surface = c.getSurface();
+              if (surface == null || !surface.isValid()) return;
+              try {
+                DisplayManager dm = (DisplayManager) getCarContext().getSystemService(Context.DISPLAY_SERVICE);
+                virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", c.getWidth(), c.getHeight(),
+                    c.getDpi(), surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION);
+                if (virtualDisplay == null) return;
+                Display display = virtualDisplay.getDisplay();
+                presentation = new Presentation(getCarContext(), display);
+                web = new WebView(getCarContext());
+                WebSettings s = web.getSettings();
+                s.setJavaScriptEnabled(true);
+                s.setDomStorageEnabled(true);
+                s.setMediaPlaybackRequiresUserGesture(false);
+                s.setAllowFileAccess(true);
+                s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                web.addJavascriptInterface(new CarBridge(getCarContext(), web, main, playerView), "Android");
+                web.setWebChromeClient(new WebChromeClient());
+                web.setWebViewClient(new WebViewClient() {
+                  @Override public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                    String u = request.getUrl().toString();
+                    return !(u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:"));
+                  }
+                  @Override public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    installCarKeyboard(view);
+                  }
+                });
+                presentation.setContentView(web);
+                presentation.show();
+                web.loadUrl("file:///android_asset/index.html");
+              } catch (Throwable t) { Log.e("AmeerCarWeb", "Failed to attach WebView to car surface", t); detach(); }
+            }
+
+            private void installCarKeyboard(WebView view) {
+              String js = "(function(){"
+                + "if(window.__ameerCarKeyboardInstalled)return;window.__ameerCarKeyboardInstalled=true;"
+                + "var active=null,shift=false,symbols=false;"
+                + "var st=document.createElement('style');"
+                + "st.textContent='#ameer-car-kb{position:fixed;z-index:2147483647;left:0;right:0;bottom:0;background:rgba(15,18,24,.98);padding:6px;display:none;max-height:48vh;overflow:auto;border-top:2px solid #4b8cff;font-family:Arial}#ameer-car-kb .r{display:flex;gap:3px;margin:3px 0}#ameer-car-kb button{flex:1;min-width:0;height:38px;border:0;border-radius:6px;background:#343b49;color:white;font-size:16px;font-weight:bold}#ameer-car-kb button.a{background:#1769aa}';"
+                + "document.head.appendChild(st);var kb=document.createElement('div');kb.id='ameer-car-kb';"
+                + "function put(v){if(!active)return;try{if(active.isContentEditable)document.execCommand('insertText',false,v);else{var a=active.selectionStart==null?active.value.length:active.selectionStart,b=active.selectionEnd==null?a:active.selectionEnd;if(active.setRangeText)active.setRangeText(v,a,b,'end');else active.value=(active.value||'')+v;active.dispatchEvent(new Event('input',{bubbles:true}));active.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){}active.focus();}"
+                + "function draw(){kb.innerHTML='';var rows=symbols?[['1','2','3','4','5','6','7','8','9','0'],['@','#','$','%','&','-','+','(',')','/'],['*',';','!', '?',':','_','.'],['ABC','⌫','مسافة','↵','لصق','إخفاء']]:[['1','2','3','4','5','6','7','8','9','0'],['q','w','e','r','t','y','u','i','o','p'],['a','s','d','f','g','h','j','k','l'],['⇧','z','x','c','v','b','n','m','⌫'],['?123','مسافة','-','_','.','@','↵','لصق','إخفاء']];"
+                + "rows.forEach(function(row){var r=document.createElement('div');r.className='r';row.forEach(function(k){var b=document.createElement('button');b.textContent=k;if(['لصق','إخفاء','↵'].includes(k))b.className='a';b.addEventListener('pointerdown',function(e){e.preventDefault();});b.addEventListener('click',function(){if(k==='إخفاء'){kb.style.display='none';return;}if(k==='لصق'){try{var t=window.Android&&Android.pasteClipboard?Android.pasteClipboard():'';if(t)put(t);}catch(e){}return;}if(k==='مسافة'){put(' ');return;}if(k==='↵'){put(active&&active.tagName==='TEXTAREA'?'\\n':' ');return;}if(k==='⌫'){if(!active)return;try{if(active.isContentEditable)document.execCommand('delete',false,null);else{var x=active.selectionStart==null?active.value.length:active.selectionStart,y=active.selectionEnd==null?x:active.selectionEnd;if(x===y&&x>0)x--;active.setRangeText('',x,y,'end');active.dispatchEvent(new Event('input',{bubbles:true}));}}catch(e){}active.focus();return;}if(k==='⇧'){shift=!shift;draw();return;}if(k==='?123'||k==='ABC'){symbols=!symbols;draw();return;}put(shift?k.toUpperCase():k);if(shift){shift=false;draw();}});r.appendChild(b);});kb.appendChild(r);});}"
+                + "draw();document.body.appendChild(kb);function fieldOf(n){if(!n)return null;return n.closest&&n.closest('input:not([type=password]):not([type=file]),textarea,[contenteditable=true],[role=textbox],[role=searchbox]');}function activate(t){if(!t)return;active=t;kb.style.display='block';try{t.focus({preventScroll:true});}catch(e){try{t.focus();}catch(x){}}setTimeout(function(){try{t.scrollIntoView({block:'center'});}catch(e){}},80);}['focusin','click','touchend','mousedown'].forEach(function(ev){document.addEventListener(ev,function(e){var t=fieldOf(e.target);if(t)activate(t);},true);});"
+                + "document.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('a'))kb.style.display='none';},true);"
+                + "})();";
+              view.evaluateJavascript(js, null);
+            }
+
+            private void detach() {
+              try { if (web != null) { web.stopLoading(); web.destroy(); } } catch (Exception ignored) {}
+              web = null;
+              try { if (presentation != null) presentation.dismiss(); } catch (Exception ignored) {}
+              presentation = null;
+              try { if (virtualDisplay != null) virtualDisplay.release(); } catch (Exception ignored) {}
+              virtualDisplay = null;
+            }
+
+            private void dispatchTap(float x, float y) {
+              if (presentation == null || web == null) return;
+              long now = android.os.SystemClock.uptimeMillis();
+              MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0);
+              MotionEvent up = MotionEvent.obtain(now, now + 60, MotionEvent.ACTION_UP, x, y, 0);
+              presentation.getWindow().getDecorView().dispatchTouchEvent(down);
+              presentation.getWindow().getDecorView().dispatchTouchEvent(up);
+              down.recycle(); up.recycle();
+            }
+
+            private void dispatchDrag(float dx, float dy) {
+              if (presentation == null || web == null) return;
+              float x = Math.max(2, web.getWidth() * .5f);
+              float y = Math.max(2, web.getHeight() * .5f);
+              long now = android.os.SystemClock.uptimeMillis();
+              MotionEvent d = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0);
+              MotionEvent m = MotionEvent.obtain(now, now + 70, MotionEvent.ACTION_MOVE, x - dx, y - dy, 0);
+              MotionEvent u = MotionEvent.obtain(now, now + 140, MotionEvent.ACTION_UP, x - dx, y - dy, 0);
+              presentation.getWindow().getDecorView().dispatchTouchEvent(d);
+              presentation.getWindow().getDecorView().dispatchTouchEvent(m);
+              presentation.getWindow().getDecorView().dispatchTouchEvent(u);
+              d.recycle(); m.recycle(); u.recycle();
+            }
+
+            @Override public Template onGetTemplate() {
+              return new NavigationTemplate.Builder()
+                  .setActionStrip(new ActionStrip.Builder().addAction(Action.BACK).build())
+                  .build();
+            }
+
+          }
+
+          final class CarBridge {
+            private final CarContext context;
+            private final WebView web;
+            private final Handler main;
+            private final PlayerView playerView;
+            private ExoPlayer carPlayer;
+            CarBridge(CarContext c, WebView w, Handler h, PlayerView p) {
+              context = c; web = w; main = h; playerView = p;
+            }
+
+            @JavascriptInterface public String deviceId() {
+              String id = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+              return id == null ? "UNKNOWN" : id.toUpperCase();
+            }
+            @JavascriptInterface public void copy(String value) {
+              ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+              cm.setPrimaryClip(ClipData.newPlainText("Ameer Screens", value));
+            }
+            @JavascriptInterface public void openWeb(String url) {
+              web.post(() -> web.loadUrl(url));
+            }
+            @JavascriptInterface public void openApp(String pkg) {
+              if ("com.waze".equals(pkg) || "com.google.android.apps.maps".equals(pkg)) {
+                try {
+                  Intent nav = new Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=My%20Location"));
+                  // Let Android Auto choose the active navigation app; explicit package targeting is not supported here.
+                  context.startCarApp(nav);
+                  return;
+                } catch (Exception ignored) {}
+              }
+              try {
+                Intent i = context.getPackageManager().getLaunchIntentForPackage(pkg);
+                if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(i); }
+              } catch (Exception ignored) {}
+            }
+            @JavascriptInterface public void saveMapApps(String json) {
+              context.getSharedPreferences("ameer_maps", 0).edit().putString("apps", json).apply();
+            }
+            @JavascriptInterface public String listApps() {
+              JSONArray out = new JSONArray();
+              try {
+                Intent q = new Intent(Intent.ACTION_MAIN); q.addCategory(Intent.CATEGORY_LAUNCHER);
+                for (ResolveInfo r : context.getPackageManager().queryIntentActivities(q, 0)) {
+                  JSONObject o = new JSONObject(); o.put("n", r.loadLabel(context.getPackageManager()).toString());
+                  o.put("p", r.activityInfo.packageName); out.put(o);
+                }
+              } catch (Exception ignored) {}
+              return out.toString();
+            }
+            @JavascriptInterface public String listMedia(String kind) {
+              JSONArray out = new JSONArray();
+              try {
+                Uri base = "audio".equals(kind) ? MediaStore.Audio.Media.EXTERNAL_CONTENT_URI :
+                    ("video".equals(kind) ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+                String name = MediaStore.MediaColumns.DISPLAY_NAME;
+                Cursor c = context.getContentResolver().query(base, new String[]{MediaStore.MediaColumns._ID, name},
+                    null, null, MediaStore.MediaColumns.DATE_ADDED + " DESC");
+                if (c != null) {
+                  int n = 0;
+                  while (c.moveToNext() && n++ < 300) {
+                    JSONObject o = new JSONObject(); o.put("n", c.getString(1));
+                    o.put("u", Uri.withAppendedPath(base, c.getString(0)).toString()); out.put(o);
+                  }
+                  c.close();
+                }
+              } catch (Exception ignored) {}
+              return out.toString();
+            }
+            @JavascriptInterface public String folders() { return context.getSharedPreferences("f", 0).getString("l", "[]"); }
+            @JavascriptInterface public void removeFolder(String t) {
+              try {
+                JSONArray a = new JSONArray(folders()), n = new JSONArray();
+                for (int i=0;i<a.length();i++) if (!a.getJSONObject(i).optString("t").equals(t)) n.put(a.getJSONObject(i));
+                context.getSharedPreferences("f",0).edit().putString("l",n.toString()).apply();
+              } catch (Exception ignored) {}
+            }
+            @JavascriptInterface public String listDir(String tree, String doc) { return "[]"; }
+            @JavascriptInterface public void pickFolder() {
+              Intent i = new Intent(context, MainActivity.class);
+              i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+              i.putExtra("ameer_pick_folder", true); context.startActivity(i);
+            }
+            @JavascriptInterface public void playVideo(String url) {
+              try { Intent i = new Intent(context, VideoActivity.class); i.putExtra("u", url); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(i); } catch (Exception ignored) {}
+            }
+            @JavascriptInterface public void view(String uri, String mime) {
+              try { Intent i = new Intent(Intent.ACTION_VIEW); i.setDataAndType(Uri.parse(uri), mime == null || mime.isEmpty() ? "*/*" : mime); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION); context.startActivity(i); } catch (Exception ignored) {}
+            }
+          }
+          ''')
+          PY
+
+      - name: Repair folder picker, file browsing and car back action
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def patch(path, changes):
+              p = Path(path)
+              s = p.read_text()
+              for old, new, label in changes:
+                  if old not in s:
+                      raise SystemExit(f"Patch anchor missing in {path}: {label}")
+                  s = s.replace(old, new, 1)
+              p.write_text(s)
+
+          patch("app/src/main/java/com/carscreens/app/MainActivity.java", [
+              ('WebView w; ValueCallback<Uri[]> fcb; View custom; FrameLayout root;',
+               'WebView w; ValueCallback<Uri[]> fcb; View custom; FrameLayout root; boolean folderPickerOnly;',
+               'activity fields'),
+              ('    w.loadUrl("file:///android_asset/index.html");',
+               '    folderPickerOnly = getIntent().getBooleanExtra("ameer_pick_folder", false);\n    w.loadUrl("file:///android_asset/index.html");\n    if (folderPickerOnly) w.post(() -> launchFolderPicker());',
+               'launch picker from car handoff'),
+              ('  class Bridge {',
+               '  private void launchFolderPicker() {\n    try {\n      Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);\n      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);\n      startActivityForResult(i, 2);\n    } catch (Exception e) { if (folderPickerOnly) finish(); }\n  }\n\n  @Override protected void onNewIntent(Intent intent) {\n    super.onNewIntent(intent); setIntent(intent);\n    if (intent.getBooleanExtra("ameer_pick_folder", false)) { folderPickerOnly = true; launchFolderPicker(); }\n  }\n\n  class Bridge {',
+               'folder picker helper and reused activity'),
+              ('    @JavascriptInterface public void pickFolder() {\n      runOnUiThread(new Runnable() { public void run() {\n        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);\n        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);\n        startActivityForResult(i, 2);\n      }});\n    }',
+               '    @JavascriptInterface public void pickFolder() { runOnUiThread(() -> launchFolderPicker()); }',
+               'bridge picker reuse'),
+              ('        w.evaluateJavascript("fshow()", null);\n      } catch (Exception e) {}\n    }\n  }\n  @Override public void onBackPressed()',
+               '        if (folderPickerOnly) finish(); else w.evaluateJavascript("fshow()", null);\n      } catch (Exception e) { if (folderPickerOnly) finish(); }\n    } else if (rq == 2 && folderPickerOnly) { finish(); }\n  }\n  @Override public void onBackPressed()',
+               'return to car after folder selection')
+          ])
+
+          patch("app/src/main/java/com/carscreens/app/CarWebScreen.java", [
+              ('import android.provider.MediaStore;','import android.provider.MediaStore;\n          import android.provider.DocumentsContract;','documents contract import'),
+              ('Action.BACK','new Action.Builder().setTitle("رجوع").setOnClickListener(() -> { if (web != null) web.evaluateJavascript("carBack()", null); }).build()','custom back action'),
+              ('''@JavascriptInterface public String listDir(String tree, String doc) { return "[]"; }''',
+               '''@JavascriptInterface public String listDir(String tree, String doc) {
+              JSONArray out = new JSONArray();
+              Cursor c = null;
+              try {
+                Uri treeUri = Uri.parse(tree);
+                String documentId = (doc == null || doc.length() == 0)
+                    ? DocumentsContract.getTreeDocumentId(treeUri) : doc;
+                Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
+                c = context.getContentResolver().query(children,
+                    new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                      DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                      DocumentsContract.Document.COLUMN_MIME_TYPE},
+                    null, null, null);
+                if (c != null) {
+                  while (c.moveToNext()) {
+                    String id = c.getString(0);
+                    String mime = c.getString(2);
+                    JSONObject item = new JSONObject();
+                    item.put("id", id);
+                    item.put("n", c.getString(1));
+                    item.put("m", mime);
+                    item.put("d", DocumentsContract.Document.MIME_TYPE_DIR.equals(mime));
+                    item.put("u", DocumentsContract.buildDocumentUriUsingTree(treeUri, id).toString());
+                    out.put(item);
+                  }
+                }
+              } catch (Exception e) {
+                Log.e("AmeerCarWeb", "Unable to list selected folder", e);
+              } finally {
+                if (c != null) c.close();
+              }
+              return out.toString();
+            }''','real SAF directory listing')          ])
+          patch("app/src/main/assets/index.html", [              ("""function fshow(){FP=[];renderFiles()}""",
+               """function fshow(){FP=[];renderFiles()}\nsetInterval(()=>{if(cur==='files'&&!FP.length)renderFiles()},1500)""",
+               'refresh saved folders after picker'),
+              ("""function home(){$('app').style.display='none';$('home').style.display='block';document.querySelectorAll('video,audio').forEach(m=>m.pause());$('mv').innerHTML='';$('fv').innerHTML=''}""",
+               """function carBack(){if($('app').style.display==='none')return;if(cur==='files'&&FP.length){FP.pop();renderFiles();return}if(cur==='radio'&&$('rl').querySelector('button')){radioCountries();return}home()}\nfunction home(){$('app').style.display='none';$('home').style.display='block';document.querySelectorAll('video,audio').forEach(m=>m.pause());$('mv').innerHTML='';$('fv').innerHTML=''}""",
+               'JavaScript back navigation')
+          ])
+          PY
+
+      - name: Fix car input, in-surface video, IPTV and remove maps
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          html_path = Path("app/src/main/assets/index.html")
+          html = html_path.read_text()
+          gradle = Path("app/build.gradle")
+          gradle_text = gradle.read_text()
+          gradle_text = gradle_text.replace(
+              "dependencies { implementation 'androidx.car.app:app:1.4.0' }",
+              """dependencies {
+                implementation 'androidx.car.app:app:1.4.0'
+                implementation 'androidx.media3:media3-exoplayer:1.4.1'
+                implementation 'androidx.media3:media3-exoplayer-hls:1.4.1'
+                implementation 'androidx.media3:media3-ui:1.4.1'
+              }"""
+          )
+          gradle.write_text(gradle_text)
+
+
+          # Remove the maps tile and its dedicated web shortcut from the interface.
+          html = re.sub(r"\['maps','الخرائط',[^\n]*\],?\n", "", html)
+          html = re.sub(r'\s*<div id="mapsweb"[^>]*>.*?</div>\s*', '\n', html, flags=re.S)
+          html = html.replace("let cur='',appKey='maps',tvMode='live';", "let cur='',appKey='apps',tvMode='live';")
+          html = html.replace("if(k==='maps'||k==='apps')", "if(k==='apps')")
+          html = html.replace("show('apps',t[1]);$('mapsweb').style.display=k==='maps'?'block':'none';renderApps();return", "show('apps',t[1]);renderApps();return")
+          html = html.replace("if(appKey==='maps' && A.saveMapApps) A.saveMapApps(JSON.stringify(a));", "")
+          html = html.replace("if(appKey==='maps' && A.saveMapApps)A.saveMapApps(JSON.stringify(a));", "")
+          a = html.find("function renderApps(){")
+          b = html.find("function pickApp()", a)
+          if a < 0 or b < 0:
+              raise SystemExit("renderApps bounds missing")
+          html = html[:a] + """function renderApps(){
+            const a=S('ap_'+appKey)||[];
+            $('al').innerHTML='';
+            a.forEach((x,i)=>it($('al'),x.n,()=>A.openApp(x.p),xb(()=>{a.splice(i,1);S('ap_'+appKey,a);renderApps()})));
+            $('ap2').innerHTML='';
+          }
+          """ + html[b:]
+
+          # Play videos inside the same WebView surface, not in a phone Activity.
+          a = html.find("function player(box,u,m){")
+          b = html.find("\nfunction loadMedia()", a)
+          if a < 0 or b < 0:
+              raise SystemExit("player function bounds missing")
+          html = html[:a] + """function player(box,u,m){
+            box.innerHTML='';
+            if(m.startsWith('video')&&A.playVideo){box.textContent='جار تشغيل الفيديو على شاشة السيارة...';A.playVideo(u);return}
+            const t=m.startsWith('audio')?'audio':'img';
+            const e=document.createElement(t);e.src=FU(u);
+            if(t==='img')e.style.cssText='width:100%;border-radius:14px';
+            else{e.controls=true;e.autoplay=true;e.preload='auto';e.addEventListener('error',()=>{box.textContent='تعذّر تشغيل الملف الصوتي.'})}
+            box.appendChild(e);if(t==='audio')e.play().catch(()=>{});
+          }
+          """ + html[b:]
+
+          # Improve M3U parsing and HLS/native playback fallback with visible errors.
+          a = html.find("function playUrl(u,id){")
+          b = html.find("\nfunction addList", a)
+          if a < 0 or b < 0:
+              raise SystemExit("IPTV function bounds missing")
+          html = html[:a] + """function playUrl(u,id){
+            const v=$(id);u=(u||'').trim();if(!u)return;
+            const old=$('tvError');if(old)old.remove();
+            if(A.playVideo){A.playVideo(u);return}
+            v.src=u;v.play().catch(()=>{});
+          }
+          function parseM3u(t,base){
+            const out=[];let name='',logo='',group='';
+            (t||'').replace(/^\\uFEFF/,'').split(/\\r?\\n/).forEach(line=>{
+              const l=line.trim();if(!l)return;
+              if(l.startsWith('#EXTINF')){
+                const comma=l.lastIndexOf(',');name=comma>=0?l.slice(comma+1).trim():'';
+                const nm=l.match(/tvg-name=[\\"']([^\\"']+)/i);if(!name&&nm)name=nm[1];
+                const lg=l.match(/tvg-logo=[\\"']([^\\"']+)/i);logo=lg?lg[1]:'';
+                const gp=l.match(/group-title=[\\"']([^\\"']+)/i);group=gp?gp[1]:'';
+              }else if(!l.startsWith('#')){
+                let u=l;try{if(base)u=new URL(l,base).href}catch(e){}
+                out.push({n:name||l,u,logo,group});name='';logo='';group='';
+              }
+            });return out;
+          }
+          """ + html[b:]
+          html = html.replace(
+            "async function addUrl(){try{const t=await(await fetch($('m3url').value.trim())).text();addList(parseM3u(t));$('m3url').value=''}catch(e){alert('تعذّر تحميل الرابط. الصق محتوى القائمة بدلاً منه.')}}",
+            "async function addUrl(){try{const u=$('m3url').value.trim();if(!u)throw 0;const t=A.fetchText?A.fetchText(u):await(await fetch(u)).text();if(!t||!t.trim())throw 0;const l=parseM3u(t,u);if(!l.length)throw 0;addList(l);$('m3url').value=''}catch(e){alert('تعذّر تحميل القنوات من الرابط. جرّب رابط M3U مباشر أو اختر الملف من الجهاز.')}}"
+          )
+          html = html.replace("function show(id,t){$('home').style.display='none';", "function show(id,t){if(A.hidePlayer)A.hidePlayer();$('home').style.display='none';")
+          html = html.replace("function home(){$('app').style.display='none';", "function home(){if(A.hidePlayer)A.hidePlayer();$('app').style.display='none';")
+          html = html.replace("function carBack(){if($('app').style.display==='none')return;", "function carBack(){if(A.hidePlayer)A.hidePlayer();if($('app').style.display==='none')return;")
+          html_path.write_text(html)
+
+          # Harden touch-to-WebView coordinate mapping and enable WebView focus for input fields.
+          java_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          java = java_path.read_text()
+          java = java.replace(
+              "web = new WebView(getCarContext());",
+              "web = new WebView(getCarContext());\n                web.setFocusable(true);\n                web.setFocusableInTouchMode(true);"
+          )
+          java = java.replace(
+              "import android.view.Surface;",
+              "import android.view.Surface;" + chr(10) + "import android.view.View;" + chr(10) + "import android.widget.FrameLayout;" + chr(10) + "import androidx.media3.common.MediaItem;" + chr(10) + "import androidx.media3.exoplayer.ExoPlayer;" + chr(10) + "import androidx.media3.ui.PlayerView;"
+          )
+          java = java.replace(
+              "private WebView web;",
+              "private WebView web;" + chr(10) + "private FrameLayout root;" + chr(10) + "private PlayerView playerView;" + chr(10) + "private ExoPlayer carPlayer;"
+          )
+          java = java.replace(
+              "web.setFocusableInTouchMode(true);",
+              "web.setFocusableInTouchMode(true);" + chr(10) + "root = new FrameLayout(getCarContext());" + chr(10) + "playerView = new PlayerView(getCarContext());" + chr(10) + "playerView.setUseController(true);" + chr(10) + "playerView.setVisibility(View.GONE);"
+          )
+          java = java.replace(
+              "presentation.setContentView(web);",
+              "root.addView(web, new FrameLayout.LayoutParams(-1, -1));" + chr(10) + "root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));" + chr(10) + "presentation.setContentView(root);"
+          )
+          java = java.replace(
+              "web = null;",
+              "web = null;" + chr(10) + "try { if (carPlayer != null) { carPlayer.release(); carPlayer = null; } } catch (Exception ignored) {}" + chr(10) + "playerView = null; root = null;",
+              1
+          )
+          old_play = """@JavascriptInterface public void playVideo(String url) {
+              try { Intent i = new Intent(context, VideoActivity.class); i.putExtra("u", url); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(i); } catch (Exception ignored) {}
+            }"""
+          new_play = """@JavascriptInterface public void playVideo(String url) {
+              main.post(() -> {
+                try {
+                  if (carPlayer == null) carPlayer = new ExoPlayer.Builder(context).build();
+                  playerView.setPlayer(carPlayer);
+                  web.setVisibility(View.GONE);
+                  playerView.setVisibility(View.VISIBLE);
+                  carPlayer.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
+                  carPlayer.prepare();
+                  carPlayer.play();
+                } catch (Exception e) { Log.e("AmeerCarWeb", "In-car playback failed", e); }
+              });
+            }
+            @JavascriptInterface public void hidePlayer() {
+              main.post(() -> {
+                try { if (carPlayer != null) carPlayer.pause(); } catch (Exception ignored) {}
+                if (playerView != null) playerView.setVisibility(View.GONE);
+                if (web != null) web.setVisibility(View.VISIBLE);
+              });
+            }"""
+          if old_play not in java:
+              raise SystemExit("native player bridge anchor missing")
+          java = java.replace(old_play, new_play, 1)
+
+          java = java.replace(
+              "presentation.show();\n                web.loadUrl",
+              "presentation.show();\n                web.requestFocus();\n                web.loadUrl"
+          )
+          java = java.replace(
+              "long now = android.os.SystemClock.uptimeMillis();",
+              """float sx = current == null ? x : x * web.getWidth() / Math.max(1f, current.getWidth());
+              float sy = current == null ? y : y * web.getHeight() / Math.max(1f, current.getHeight());
+              long now = android.os.SystemClock.uptimeMillis();"""
+          )
+          java = java.replace("MotionEvent.ACTION_DOWN, x, y, 0", "MotionEvent.ACTION_DOWN, sx, sy, 0")
+          java = java.replace("MotionEvent.ACTION_UP, x, y, 0", "MotionEvent.ACTION_UP, sx, sy, 0")
+          java = java.replace(
+              "float y = Math.max(2, web.getHeight() * .5f);",
+              "float y = Math.max(2, web.getHeight() * .5f);\n              float sdx = current == null ? dx : dx * web.getWidth() / Math.max(1f, current.getWidth());\n              float sdy = current == null ? dy : dy * web.getHeight() / Math.max(1f, current.getHeight());"
+          )
+          java = java.replace("MotionEvent.ACTION_MOVE, x - dx, y - dy, 0", "MotionEvent.ACTION_MOVE, sx - sdx, sy - sdy, 0")
+          java = java.replace("MotionEvent.ACTION_UP, x - dx, y - dy, 0", "MotionEvent.ACTION_UP, sx - sdx, sy - sdy, 0")
+          java = java.replace("web.dispatchTouchEvent(down);", "presentation.getWindow().getDecorView().dispatchTouchEvent(down);")
+          java = java.replace("web.dispatchTouchEvent(up);", "presentation.getWindow().getDecorView().dispatchTouchEvent(up);")
+          if "presentation.getWindow().getDecorView().dispatchTouchEvent(down);" not in java:
+              raise SystemExit("touch dispatch patch failed")
+          # Keep media playback in WebView by serving persisted SAF/MediaStore URIs through the app bridge URL.
+          java = java.replace(
+              "import android.webkit.WebViewClient;",
+              "import android.webkit.WebViewClient;" + chr(10) + "import android.webkit.WebResourceRequest;" + chr(10) + "import android.webkit.WebResourceResponse;" + chr(10) + "import android.content.res.AssetFileDescriptor;" + chr(10) + "import java.io.InputStream;"
+          )
+          marker = "@Override public void onPageFinished(WebView view, String url) {"
+          replacement = """@Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                    String address = request.getUrl().toString();
+                    if (!address.startsWith("https://localfile.invalid/")) return null;
+                    Map<String,String> headers = new HashMap<>();
+                    headers.put("Access-Control-Allow-Origin", "*");
+                    headers.put("Accept-Ranges", "bytes");
+                    AssetFileDescriptor afd = null;
+                    try {
+                      String raw = Uri.parse(address).getQueryParameter("u");
+                      if (raw == null) throw new IllegalArgumentException("Missing media URI");
+                      Uri source = Uri.parse(raw);
+                      String mime = getCarContext().getContentResolver().getType(source);
+                      if (mime == null) mime = "application/octet-stream";
+                      afd = getCarContext().getContentResolver().openAssetFileDescriptor(source, "r");
+                      if (afd == null) throw new IllegalStateException("Cannot open media descriptor");
+                      long total = afd.getLength();
+                      String range = request.getRequestHeaders().get("Range");
+                      if (range != null && total > 0) {
+                        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("bytes=(\\\\d+)-(\\\\d*)").matcher(range);
+                        if (matcher.matches()) {
+                          long start = Long.parseLong(matcher.group(1));
+                          long end = matcher.group(2).isEmpty() ? total - 1 : Math.min(total - 1, Long.parseLong(matcher.group(2)));
+                          if (start >= total || end < start) {
+                            headers.put("Content-Range", "bytes */" + total);
+                            afd.close();
+                            return new WebResourceResponse(mime, null, 416, "Range Not Satisfiable", headers, new java.io.ByteArrayInputStream(new byte[0]));
+                          }
+                          long remaining = end - start + 1;
+                          InputStream stream = afd.createInputStream();
+                          long skipped = 0; while (skipped < start) { long n = stream.skip(start - skipped); if (n <= 0) break; skipped += n; }
+                          final AssetFileDescriptor owned = afd;
+                          InputStream bounded = new java.io.FilterInputStream(stream) {
+                            long left = remaining;
+                            @Override public int read() throws java.io.IOException { if (left <= 0) return -1; int v = super.read(); if (v >= 0) left--; return v; }
+                            @Override public int read(byte[] b, int off, int len) throws java.io.IOException { if (left <= 0) return -1; int n = super.read(b, off, (int)Math.min(len, left)); if (n > 0) left -= n; return n; }
+                            @Override public void close() throws java.io.IOException { try { super.close(); } finally { owned.close(); } }
+                          };
+                          headers.put("Content-Range", "bytes " + start + "-" + end + "/" + total);
+                          headers.put("Content-Length", String.valueOf(remaining));
+                          return new WebResourceResponse(mime, null, 206, "Partial Content", headers, bounded);
+                        }
+                      }
+                      InputStream stream = afd.createInputStream();
+                      final AssetFileDescriptor owned = afd;
+                      InputStream managed = new java.io.FilterInputStream(stream) {
+                        @Override public void close() throws java.io.IOException { try { super.close(); } finally { owned.close(); } }
+                      };
+                      if (total > 0) headers.put("Content-Length", String.valueOf(total));
+                      return new WebResourceResponse(mime, null, 200, "OK", headers, managed);
+                    } catch (Exception e) {
+                      try { if (afd != null) afd.close(); } catch (Exception ignored) {}
+                      try {
+                        String raw = Uri.parse(address).getQueryParameter("u");
+                        InputStream fallback = getCarContext().getContentResolver().openInputStream(Uri.parse(raw));
+                        return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers, fallback);
+                      } catch (Exception ignored) {
+                        return new WebResourceResponse("text/plain","utf-8",404,"Not Found",headers,new java.io.ByteArrayInputStream(new byte[0]));
+                      }
+                    }
+                  }
+                  @Override public void onPageFinished(WebView view, String url) {"""
+          if marker not in java:
+              raise SystemExit("WebViewClient insertion anchor missing")
+          java = java.replace(marker, replacement, 1)
+          # Native M3U retrieval runs off the WebView UI thread (JavascriptInterface thread).
+          bridge_marker = "@JavascriptInterface public void openApp(String pkg) {"
+          bridge_add = """@JavascriptInterface public String fetchText(String address) {
+              java.net.HttpURLConnection connection = null;
+              try {
+                java.net.URL u = new java.net.URL(address);
+                connection = (java.net.HttpURLConnection) u.openConnection();
+                connection.setConnectTimeout(12000); connection.setReadTimeout(20000);
+                connection.setRequestProperty("User-Agent", "AmeerScreens/1.0");
+                java.io.InputStream in = connection.getInputStream();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[8192]; int count; int total = 0;
+                while ((count = in.read(buffer)) != -1 && total < 5000000) { out.write(buffer,0,count); total += count; }
+                in.close();
+                return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+              } catch (Exception e) { return ""; }
+              finally { if (connection != null) connection.disconnect(); }
+            }
+            """
+          if bridge_marker not in java:
+              raise SystemExit("CarBridge insertion anchor missing")
+          java = java.replace(bridge_marker, bridge_add + bridge_marker, 1)
+          bridge_pos = java.find("final class CarBridge {")
+          if bridge_pos < 0:
+              raise SystemExit("CarBridge class declaration missing")
+          outer_close = java.rfind("}", 0, bridge_pos)
+          if outer_close < 0:
+              raise SystemExit("CarWebScreen closing brace missing")
+          java = java[:outer_close] + java[outer_close + 1:]
+          java = java.rstrip() + "\n          }\n"
+          main_path = Path("app/src/main/java/com/carscreens/app/MainActivity.java")
+          main_java = main_path.read_text()
+          main_bridge_marker = "@JavascriptInterface public void openApp(String p) {"
+          main_fetch = """@JavascriptInterface public String fetchText(String address) {
+              java.net.HttpURLConnection connection = null;
+              try {
+                java.net.URL u = new java.net.URL(address);
+                connection = (java.net.HttpURLConnection) u.openConnection();
+                connection.setConnectTimeout(12000); connection.setReadTimeout(20000);
+                connection.setRequestProperty("User-Agent", "AmeerScreens/1.0");
+                connection.setRequestProperty("Accept", "application/x-mpegURL, audio/x-mpegurl, */*");
+                int status = connection.getResponseCode();
+                if (status < 200 || status >= 300) return "";
+                java.io.InputStream in = connection.getInputStream();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[8192]; int count; int total = 0;
+                while ((count = in.read(buffer)) != -1 && total < 10000000) { out.write(buffer,0,count); total += count; }
+                in.close();
+                return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+              } catch (Exception e) { return ""; }
+              finally { if (connection != null) connection.disconnect(); }
+            }
+            """
+          if main_bridge_marker not in main_java:
+              raise SystemExit("MainActivity bridge insertion anchor missing")
+          main_java = main_java.replace(main_bridge_marker, main_fetch + main_bridge_marker, 1)
+          main_path.write_text(main_java)
+          java_path.write_text(java)
+          PY
+
+      - name: Route web and video actions to the active car display and stabilize text entry
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          car_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          car = car_path.read_text()
+
+          # Keep a live reference to the WebView/PlayerView bridge so calls from
+          # the phone-side HTML are routed back to the active car display.
+          if "private static volatile CarBridge activeBridge;" not in car:
+              anchor = "private int scrollX, scrollY;"
+              if anchor not in car: raise SystemExit("CarWebScreen fields missing")
+              car = car.replace(anchor, anchor + chr(10) + "            private static volatile CarBridge activeBridge;", 1)
+
+          register_old = 'web.addJavascriptInterface(new CarBridge(getCarContext(), web, main, playerView), "Android");'
+          if "activeBridge = bridge;" not in car:
+              if register_old not in car: raise SystemExit("Car bridge registration missing")
+              car = car.replace(register_old,
+                  'CarBridge bridge = new CarBridge(getCarContext(), web, main, playerView);' + chr(10) + '                activeBridge = bridge;' + chr(10) + '                web.addJavascriptInterface(bridge, "Android");', 1)
+
+          if "static boolean openWebOnCar(String url)" not in car:
+              idx = car.find("private void detach() {")
+              if idx < 0: raise SystemExit("CarWebScreen detach method missing")
+              helpers = """static boolean openWebOnCar(String url) {
+              CarBridge bridge = activeBridge;
+              if (bridge == null) return false;
+              bridge.openWebOnCar(url);
+              return true;
+            }
+
+            static boolean playVideoOnCar(String url) {
+              CarBridge bridge = activeBridge;
+              if (bridge == null) return false;
+              bridge.playVideo(url);
+              return true;
+            }
+
+            """
+              car = car[:idx] + helpers + car[idx:]
+
+          detach_anchor = "private void detach() {"
+          if "CarBridge oldBridge = activeBridge;" not in car:
+              car = car.replace(detach_anchor, detach_anchor + chr(10) + "              CarBridge oldBridge = activeBridge;" + chr(10) + "              activeBridge = null;" + chr(10) + "              if (oldBridge != null) oldBridge.release();", 1)
+
+          # The WebView itself owns all web navigation on the car surface.
+          old_web = """@JavascriptInterface public void openWeb(String url) {
+              web.post(() -> web.loadUrl(url));
+            }"""
+          new_web = """void openWebOnCar(String url) {
+              main.post(() -> { try { if (web != null) web.loadUrl(url); } catch (Exception ignored) {} });
+            }
+            @JavascriptInterface public void openWeb(String url) {
+              openWebOnCar(url);
+            }"""
+          if "void openWebOnCar(String url)" not in car:
+              if old_web not in car: raise SystemExit("CarBridge openWeb method missing")
+              car = car.replace(old_web, new_web, 1)
+
+          # Release the in-car player when the car surface is detached.
+          if "void release()" not in car:
+              marker = "@JavascriptInterface public void view(String uri, String mime) {"
+              release = """void release() {
+              main.post(() -> {
+                try { if (carPlayer != null) { carPlayer.release(); carPlayer = null; } } catch (Exception ignored) {}
+                try { if (playerView != null) playerView.setPlayer(null); } catch (Exception ignored) {}
+              });
+            }
+            """
+              if marker not in car: raise SystemExit("CarBridge view method missing")
+              car = car.replace(marker, release + marker, 1)
+
+          # Never invoke a phone VideoActivity for IPTV/local video from the car.
+          for imp in [
+              "import android.view.inputmethod.EditorInfo;",
+              "import android.view.inputmethod.InputConnection;",
+              "import android.widget.Toast;",
+              "import androidx.media3.common.AudioAttributes;",
+              "import androidx.media3.common.C;",
+              "import androidx.media3.common.Player;",
+              "import androidx.media3.common.PlaybackException;",
+              "import androidx.media3.datasource.DefaultDataSource;",
+              "import androidx.media3.datasource.DefaultHttpDataSource;",
+              "import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;"
+          ]:
+              if imp not in car:
+                  car = car.replace("import android.view.Surface;", "import android.view.Surface;" + chr(10) + imp, 1)
+
+          # A custom Arabic/English keyboard is rendered in the car WebView.
+          if "onCheckIsTextEditor() { return false; }" not in car:
+              car = car.replace("web = new WebView(getCarContext());",
+                  """web = new WebView(getCarContext()) {
+                  @Override public boolean onCheckIsTextEditor() { return false; }
+                  @Override public InputConnection onCreateInputConnection(EditorInfo outAttrs) { return null; }
+                };""", 1)
+
+          car = car.replace("var active=null,shift=false,symbols=false;",
+                            "var active=null,shift=false,symbols=false,arabic=true;", 1)
+          old_rows = """function draw(){kb.innerHTML='';var rows=symbols?[['1','2','3','4','5','6','7','8','9','0'],['@','#','$','%','&','-','+','(',')','/'],['*',';','!', '?',':','_','.'],['ABC','⌫','مسافة','↵','لصق','إخفاء']]:[['1','2','3','4','5','6','7','8','9','0'],['q','w','e','r','t','y','u','i','o','p'],['a','s','d','f','g','h','j','k','l'],['⇧','z','x','c','v','b','n','m','⌫'],['?123','مسافة','-','_','.','@','↵','لصق','إخفاء']];"""
+          new_rows = """function draw(){kb.innerHTML='';var rows=symbols?[['1','2','3','4','5','6','7','8','9','0'],['@','#','$','%','&','-','+','(',')','/'],['*',';','!', '?',':','_','.'],['ABC','⌫','مسافة','↵','لصق','إخفاء']]:arabic?[['١','٢','٣','٤','٥','٦','٧','٨','٩','٠'],['ض','ص','ث','ق','ف','غ','ع','ه','خ','ح','ج'],['ش','س','ي','ب','ل','ا','ت','ن','م','ك'],['ئ','ء','ؤ','ر','لا','ى','ة','و','ز','ظ'],['EN','?123','مسافة','⌫','↵','لصق','إخفاء']]:[['1','2','3','4','5','6','7','8','9','0'],['q','w','e','r','t','y','u','i','o','p'],['a','s','d','f','g','h','j','k','l'],['⇧','z','x','c','v','b','n','m','⌫'],['عربي','?123','مسافة','-','_','.','@','↵','لصق','إخفاء']];"""
+          if old_rows in car: car = car.replace(old_rows, new_rows, 1)
+          click_old = "if(k==='⇧'){shift=!shift;draw();return;}if(k==='?123'||k==='ABC'){symbols=!symbols;draw();return;}"
+          click_new = "if(k==='عربي'){arabic=true;symbols=false;draw();return;}if(k==='EN'){arabic=false;symbols=false;draw();return;}if(k==='⇧'){shift=!shift;draw();return;}if(k==='?123'){symbols=true;draw();return;}if(k==='ABC'){symbols=false;draw();return;}"
+          if click_old in car: car = car.replace(click_old, click_new, 1)
+          car = car.replace("input:not([type=password]):not([type=file])",
+                            "input:not([type=file]):not([type=hidden])")
+          car = car.replace("input:not([type=password]):not([type=file]),textarea",
+                            "input:not([type=file]):not([type=hidden]),textarea")
+          if "document.addEventListener('pointerdown'" not in car:
+              car = car.replace("['focusin','click','touchend','mousedown'].forEach(function(ev){",
+                  "document.addEventListener('pointerdown',function(e){var t=fieldOf(e.target);if(t){try{t.setAttribute('inputmode','none');}catch(x){}}},true);['focusin','click','touchend','mousedown'].forEach(function(ev){", 1)
+
+          # Use Media3's HTTP data source for HLS, TS/MP4, and redirected IPTV URLs.
+          play_start = car.find("@JavascriptInterface public void playVideo(String url) {")
+          hide_start = car.find("@JavascriptInterface public void hidePlayer()", play_start)
+          if play_start < 0 or hide_start < 0:
+              raise SystemExit("Car native video bridge methods missing")
+          play_method = """@JavascriptInterface public void playVideo(String url) {
+              if (url == null || url.trim().isEmpty()) return;
+              final String mediaUrl = url.trim();
+              main.post(() -> {
+                try {
+                  if (playerView == null || web == null) throw new IllegalStateException("Car display is not ready");
+                  if (carPlayer != null) { carPlayer.release(); carPlayer = null; }
+                  DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                      .setUserAgent("AmeerScreens/1.0 AndroidAuto")
+                      .setAllowCrossProtocolRedirects(true);
+                  DefaultDataSource.Factory data = new DefaultDataSource.Factory(context, http);
+                  DefaultMediaSourceFactory sources = new DefaultMediaSourceFactory(data);
+                  carPlayer = new ExoPlayer.Builder(context).setMediaSourceFactory(sources).build();
+                  playerView.setUseController(true);
+                  playerView.setControllerAutoShow(true);
+                  playerView.setKeepContentOnPlayerReset(true);
+                  playerView.setPlayer(carPlayer);
+                  carPlayer.setAudioAttributes(new AudioAttributes.Builder()                      .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
+                  carPlayer.addListener(new Player.Listener() {                    @Override public void onPlayerError(PlaybackException error) {                      Toast.makeText(context, "تعذّر تشغيل القناة أو الفيديو: " + error.getErrorCodeName(), Toast.LENGTH_LONG).show();                      Log.e("AmeerCarWeb", "Media3 playback error", error);                    }
+                  });
+                  web.setVisibility(View.GONE);
+                  playerView.setVisibility(View.VISIBLE);
+                  carPlayer.setMediaItem(MediaItem.fromUri(Uri.parse(mediaUrl)));
+                  carPlayer.prepare();
+                  carPlayer.play();
+                } catch (Exception e) {
+                  Log.e("AmeerCarWeb", "In-car playback failed", e);
+                  Toast.makeText(context, "تعذّر تشغيل الفيديو على شاشة السيارة", Toast.LENGTH_LONG).show();
+                }
+              });
+            }
+            """
+          car = car[:play_start] + play_method + car[hide_start:]
+
+          # Add clipboard paste support to the custom keyboard.
+          if "pasteClipboard()" not in car:
+              copy = """@JavascriptInterface public void copy(String value) {
+              ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+              cm.setPrimaryClip(ClipData.newPlainText("Ameer Screens", value));
+            }"""
+              paste = copy + """
+            @JavascriptInterface public String pasteClipboard() {
+              try {
+                ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0)
+                  return String.valueOf(cm.getPrimaryClip().getItemAt(0).coerceToText(context));
+              } catch (Exception ignored) {}
+              return "";
+            }"""
+              if copy not in car: raise SystemExit("CarBridge clipboard method missing")
+              car = car.replace(copy, paste, 1)
+
+          car_path.write_text(car)
+
+          # Route browser/video requests originating from the phone-side WebView
+          # to the active car surface instead of always opening phone Activities.
+          main_path = Path("app/src/main/java/com/carscreens/app/MainActivity.java")
+          main = main_path.read_text()
+          def route_method(source, name, signature, body):
+              pattern = re.compile(r"(?m)^\s*@JavascriptInterface public void " + name + r"\(" + signature + r"\) \{.*?^\s*\}", re.S)
+              if "CarWebScreen." + ("openWebOnCar" if name == "openWeb" else "playVideoOnCar") + "(" in source:
+                  return source
+              if not pattern.search(source):
+                  raise SystemExit("MainActivity bridge method not found: " + name)
+              return pattern.sub(body, source, count=1)
+
+          main = route_method(main, "openWeb", r"String u", """    @JavascriptInterface public void openWeb(String u) {
+              if (CarWebScreen.openWebOnCar(u)) return;
+              Intent i = new Intent(MainActivity.this, BrowserActivity.class);
+              i.putExtra("u", u);
+              startActivity(i);
+            }""")
+          main = route_method(main, "playVideo", r"String u", """    @JavascriptInterface public void playVideo(String u) {
+              if (CarWebScreen.playVideoOnCar(u)) return;
+              Intent i = new Intent(MainActivity.this, VideoActivity.class);
+              i.putExtra("u", u);
+              startActivity(i);
+            }""")
+          main_path.write_text(main)
+
+          # Guard the two required behaviors at build time.
+          for token in ["openWebOnCar(String url)", "playVideoOnCar(String url)",
+                        "onCheckIsTextEditor() { return false; }", "arabic=true",
+                        "pasteClipboard()", "DefaultMediaSourceFactory sources"]:
+              if token not in car: raise SystemExit("Car behavior check failed: " + token)
+          PY
+
+      - name: Add phone-to-car browser text and link remote input
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          # Add phone-side remote input controls to the existing browser screen.
+          browser_path = Path("app/src/main/java/com/carscreens/app/BrowserActivity.java")
+          browser = browser_path.read_text()
+          if "sendRemoteCommand(String type)" not in browser:
+              browser = browser.replace(
+                  "import android.widget.TextView;",
+                  "import android.widget.TextView;\nimport android.widget.Toast;\nimport org.json.JSONObject;",
+                  1
+              )
+              browser = browser.replace(
+                  "WebView w; EditText ed; FrameLayout root;",
+                  "WebView w; EditText ed, remoteEd; FrameLayout root;",
+                  1
+              )
+              anchor = "    col.addView(ed, new LinearLayout.LayoutParams(-1, -2));"
+              controls = """    col.addView(ed, new LinearLayout.LayoutParams(-1, -2));
+              LinearLayout remoteBar = new LinearLayout(this);
+              remoteBar.setBackgroundColor(0xFF17212B);
+              remoteEd = new EditText(this);
+              remoteEd.setSingleLine(true);
+              remoteEd.setTextColor(0xFFFFFFFF);
+              remoteEd.setHintTextColor(0xFFAAAAAA);
+              remoteEd.setHint("اكتب أو الصق نصاً لشاشة السيارة");
+              remoteEd.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+              remoteBar.addView(remoteEd, new LinearLayout.LayoutParams(0, -2, 3f));
+              remoteBar.addView(btn("إرسال النص", new View.OnClickListener() { public void onClick(View v) { sendRemoteCommand("text"); }}));
+              remoteBar.addView(btn("بحث", new View.OnClickListener() { public void onClick(View v) { sendRemoteCommand("search"); }}));
+              remoteBar.addView(btn("فتح رابط", new View.OnClickListener() { public void onClick(View v) { sendRemoteCommand("url"); }}));
+              col.addView(remoteBar, new LinearLayout.LayoutParams(-1, -2));"""
+              if anchor not in browser:
+                  raise SystemExit("BrowserActivity address-bar insertion point missing")
+              browser = browser.replace(anchor, controls, 1)
+              marker = "  Button btn(String t, View.OnClickListener l) {"
+              method = """  void sendRemoteCommand(String type) {
+              String value = remoteEd == null ? "" : remoteEd.getText().toString().trim();
+              if (value.length() == 0) return;
+              if ("url".equals(type)) {
+                if (!value.startsWith("http://") && !value.startsWith("https://")) {
+                  if (value.matches("(?i)^[a-z0-9.-]+\\\\.[a-z]{2,}(/.*)?$")) value = "https://" + value;
+                  else value = "https://www.google.com/search?q=" + Uri.encode(value);
+                }
+              }
+              try {
+                JSONObject command = new JSONObject();
+                command.put("type", type);
+                command.put("value", value);
+                getSharedPreferences("ameer_remote", MODE_PRIVATE).edit()
+                    .putString("pending", command.toString()).apply();
+                remoteEd.setText("");
+                Toast.makeText(this, "تم إرسال الطلب إلى شاشة السيارة", Toast.LENGTH_SHORT).show();
+              } catch (Exception ignored) {
+                Toast.makeText(this, "تعذّر إرسال النص", Toast.LENGTH_SHORT).show();
+              }
+            }
+
+          """
+              if marker not in browser:
+                  raise SystemExit("BrowserActivity button helper insertion point missing")
+              browser = browser.replace(marker, method + marker, 1)
+              browser_path.write_text(browser)
+
+          # Car-side bridge consumes commands written by BrowserActivity.
+          car_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          car = car_path.read_text()
+          if "pollRemoteCommand()" not in car:
+              marker = "@JavascriptInterface public void view(String uri, String mime) {"
+              method = """            @JavascriptInterface public String pollRemoteCommand() {
+              android.content.SharedPreferences prefs = context.getSharedPreferences("ameer_remote", 0);
+              String command = prefs.getString("pending", "");
+              if (command != null && command.length() > 0) prefs.edit().remove("pending").apply();
+              return command == null ? "" : command;
+            }
+
+          """
+              if marker not in car:
+                  raise SystemExit("CarBridge release insertion point missing")
+              car = car.replace(marker, method + marker, 1)
+
+          # Poll the shared command queue and insert text into the active website field,
+          # submit a website search, or navigate the car WebView to a supplied URL.
+          js_anchor = """+ "document.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('a'))kb.style.display='none';},true);"\n"""
+          if "Android.pollRemoteCommand" not in car:
+              remote_js = """if(window.Android&&Android.pollRemoteCommand&&!window.__ameerRemotePoll){window.__ameerRemotePoll=true;setInterval(function(){try{var raw=Android.pollRemoteCommand();if(!raw)return;var c=JSON.parse(raw);if(c.type==='url'){window.location.href=c.value;return;}var t=active||fieldOf(document.activeElement);if(!t){var list=document.querySelectorAll('input:not([type=hidden]):not([type=file]),textarea,[contenteditable=true],[role=textbox],[role=searchbox]');for(var i=0;i<list.length;i++){if(list[i].getClientRects().length){t=list[i];break;}}}if(c.type==='search'){if(t){active=t;put(c.value);try{var f=t.form||(t.closest?t.closest('form'):null);if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}else t.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));}catch(e){}}else{window.location.href='https://www.google.com/search?q='+encodeURIComponent(c.value);}return;}if(t){active=t;put(c.value);}else{window.location.href='https://www.google.com/search?q='+encodeURIComponent(c.value);}}catch(e){}},450);}"""
+              if js_anchor not in car:
+                  raise SystemExit("Car browser keyboard polling insertion point missing")
+              car = car.replace(js_anchor, js_anchor + "                + " + json.dumps(remote_js) + "\n", 1)
+
+          car_path.write_text(car)
+
+          for token in ["pollRemoteCommand()", "Android.pollRemoteCommand", "ameer_remote"]:
+              if token not in car:
+                  raise SystemExit("Car remote-input verification failed: " + token)
+          for token in ["sendRemoteCommand(String type)", "إرسال النص", "فتح رابط", "ameer_remote"]:
+              if token not in browser:
+                  raise SystemExit("Phone remote-input verification failed: " + token)
+          PY
+
+
+      - name: Replace browser with phone remote controller and connect car launch
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          # The phone is only a controller: all web pages remain in the car WebView.
+          browser = Path("app/src/main/java/com/carscreens/app/BrowserActivity.java")
+          browser.write_text(r'''package com.carscreens.app;
+
+          import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.text.InputType;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class BrowserActivity extends Activity {
+            private EditText entry;
+
+            @Override protected void onCreate(Bundle state) {
+              super.onCreate(state);
+              getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+              LinearLayout root = new LinearLayout(this);
+              root.setOrientation(LinearLayout.VERTICAL);
+              root.setPadding(18, 18, 18, 18);
+              root.setBackgroundColor(0xFF101820);
+
+              TextView title = new TextView(this);
+              title.setText("أمير للشاشات - تحكم بمتصفح السيارة");
+              title.setTextColor(0xFFFFFFFF);
+              title.setTextSize(20);
+              title.setPadding(4, 8, 4, 14);
+              root.addView(title);
+
+              TextView current = new TextView(this);
+              String opened = getIntent().getStringExtra("u");
+              current.setText("المتصفح يعمل على شاشة السيارة" + (opened == null ? "" : "\n" + opened));
+              current.setTextColor(0xFFB8C7D9);
+              current.setTextSize(13);
+              current.setPadding(4, 4, 4, 12);
+              root.addView(current);
+
+              entry = new EditText(this);
+              entry.setSingleLine(true);
+              entry.setTextColor(0xFFFFFFFF);
+              entry.setHintTextColor(0xFF9EACBA);
+              entry.setHint("اكتب أو الصق النص أو الرابط هنا");
+              entry.setTextSize(17);
+              entry.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+              root.addView(entry, new LinearLayout.LayoutParams(-1, -2));
+
+              LinearLayout row = new LinearLayout(this);
+              row.setOrientation(LinearLayout.HORIZONTAL);
+              row.addView(button("لصق", v -> paste()), weighted());
+              row.addView(button("إرسال النص", v -> send("text")), weighted());
+              root.addView(row);
+
+              LinearLayout row2 = new LinearLayout(this);
+              row2.setOrientation(LinearLayout.HORIZONTAL);
+              row2.addView(button("بحث", v -> send("search")), weighted());
+              row2.addView(button("فتح رابط", v -> send("url")), weighted());
+              root.addView(row2);
+
+              Button close = button("رجوع", v -> finish());
+              root.addView(close, new LinearLayout.LayoutParams(-1, -2));
+              setContentView(root);
+            }
+
+            private LinearLayout.LayoutParams weighted() {
+              return new LinearLayout.LayoutParams(0, -2, 1f);
+            }
+
+            private Button button(String label, View.OnClickListener listener) {
+              Button b = new Button(this);
+              b.setText(label);
+              b.setOnClickListener(listener);
+              return b;
+            }
+
+            private void paste() {
+              try {
+                ClipboardManager cm = (ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
+                  CharSequence value = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+                  if (value != null) entry.setText(value);
+                  entry.setSelection(entry.length());
+                } else {
+                  Toast.makeText(this, "الحافظة فارغة", Toast.LENGTH_SHORT).show();
+                }
+              } catch (Exception e) {
+                Toast.makeText(this, "تعذّر لصق النص", Toast.LENGTH_SHORT).show();
+              }
+            }
+
+            private void send(String type) {
+              String value = entry.getText().toString();
+              if (value.trim().isEmpty()) {
+                Toast.makeText(this, "اكتب النص أو الصق الرابط أولاً", Toast.LENGTH_SHORT).show();
+                return;
+              }
+              if ("url".equals(type)) {
+                String v = value.trim();
+                if (!v.startsWith("http://") && !v.startsWith("https://")) {
+                  if (v.matches("(?i)^[a-z0-9.-]+\\.[a-z]{2,}(/.*)?$")) value = "https://" + v;
+                  else value = "https://www.google.com/search?q=" + Uri.encode(v);
+                }
+              }
+              try {
+                org.json.JSONObject command = new org.json.JSONObject();
+                command.put("type", type);
+                command.put("value", value);
+                getSharedPreferences("ameer_remote", MODE_PRIVATE).edit()
+                    .putString("pending", command.toString()).commit();
+                Toast.makeText(this, "تم إرسال الأمر إلى شاشة السيارة", Toast.LENGTH_SHORT).show();
+              } catch (Exception e) {
+                Toast.makeText(this, "تعذّر إرسال الأمر", Toast.LENGTH_SHORT).show();
+              }
+            }
+          }
+          ''')
+
+          # Opening the browser from the phone home page must open the car page
+          # and show this phone-side controller instead of rendering the website on the phone.
+          main_path = Path("app/src/main/java/com/carscreens/app/MainActivity.java")
+          main = main_path.read_text()
+          pat = re.compile(r'(?s)@JavascriptInterface public void openWeb[(]String u[)] [{].*?}')
+          replacement = '''@JavascriptInterface public void openWeb(String u) {
+              CarWebScreen.openWebOnCar(u);
+              Intent i = new Intent(MainActivity.this, BrowserActivity.class);
+              i.putExtra("u", u);
+              startActivity(i);
+            }'''
+          main, count = pat.subn(replacement, main, count=1)
+          if count != 1:
+            raise SystemExit("Could not connect phone browser controller from MainActivity")
+          main_path.write_text(main)
+
+          # Also launch the phone controller when the browser icon is tapped on the car screen.
+          car_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          car = car_path.read_text()
+          pat = re.compile(r'(?s)@JavascriptInterface public void openWeb[(]String url[)] [{].*?}')
+          replacement = '''@JavascriptInterface public void openWeb(String url) {
+              openWebOnCar(url);
+              try {
+                Intent controller = new Intent(context, BrowserActivity.class);
+                controller.putExtra("u", url);
+                controller.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                context.startActivity(controller);
+              } catch (Exception e) {
+                Log.e("AmeerCarWeb", "Unable to open phone browser controller", e);
+              }
+            }'''
+          car, count = pat.subn(replacement, car, count=1)
+          if count != 1:
+            raise SystemExit("Could not connect phone controller to CarBridge.openWeb")
+          # Keep phone-entered commands from leaving the on-car keyboard covering the page.
+          car = car.replace("if(c.type==='url'){window.location.href=c.value;return;}",
+                            "if(c.type==='url'){kb.style.display='none';window.location.href=c.value;return;}")
+          car = car.replace("if(c.type==='search'){if(t){active=t;put(c.value);",
+                            "if(c.type==='search'){kb.style.display='none';if(t){active=t;put(c.value);")
+          car = car.replace("if(t){active=t;put(c.value);}else{window.location.href=",
+                            "if(t){kb.style.display='none';active=t;put(c.value);}else{window.location.href=")
+          car_path.write_text(car)
+
+          # Build-time checks ensure the phone controller and car bridge are both wired.
+          for path, tokens in [
+            (browser, ["لصق", "إرسال النص", "send", "ameer_remote"]),
+            (main_path, ["CarWebScreen.openWebOnCar(u)", "BrowserActivity.class"]),
+            (car_path, ["pollRemoteCommand()", "BrowserActivity.class", "Android.pollRemoteCommand"])
+          ]:
+            source = path.read_text()
+            for token in tokens:
+              if token not in source:
+                raise SystemExit("Remote browser wiring check failed: " + str(path) + " / " + token)
+          PY
+
+      - name: Fix Android Auto startup crash and show errors on car screen
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def sub(text, old, new, label):
+              if old not in text:
+                  raise SystemExit("PATCH FAILED: " + label)
+              return text.replace(old, new, 1)
+
+          # 1) Host validator: sideloaded build must not be rejected by the sample allowlist
+          svc = Path("app/src/main/java/com/carscreens/app/MapsCarAppService.java")
+          s = svc.read_text(encoding="utf-8")
+          s = sub(s, ".addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)\n        .build();",
+                  "// placeholder", "validator-a") if False else s
+          if "ALLOW_ALL_HOSTS_VALIDATOR" not in s:
+              start = s.index("public HostValidator createHostValidator()")
+              end = s.index("}", s.index("return new HostValidator.Builder", start)) + 1
+              s = s[:start] + "public HostValidator createHostValidator() {\n    return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR;\n  }" + s[end:]
+          svc.write_text(s, encoding="utf-8")
+
+          # 2) CarWebScreen: safe startup + visible error instead of silent crash
+          p = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          c = p.read_text(encoding="utf-8")
+
+          c = sub(c, "import androidx.car.app.model.Template;",
+                  "import androidx.car.app.model.Template;\nimport androidx.car.app.model.MessageTemplate;", "import")
+
+          c = sub(c, "  private WebView web;\n", "  private WebView web;\n  private volatile String startupError;\n", "field")
+
+          c = sub(c, "    getCarContext().getCarService(AppManager.class).setSurfaceCallback(surfaceCallback);\n  }",
+                  "    try {\n      getCarContext().getCarService(AppManager.class).setSurfaceCallback(surfaceCallback);\n    } catch (Throwable t) {\n      Log.e(\"AmeerCarWeb\", \"setSurfaceCallback failed\", t);\n      startupError = \"setSurfaceCallback: \" + t;\n    }\n  }", "ctor")
+
+          c = sub(c, "c.getDpi(), surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION);\n      if (virtualDisplay == null) return;",
+                  "c.getDpi(), surface,\n          DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);\n      if (virtualDisplay == null) throw new IllegalStateException(\"createVirtualDisplay returned null\");", "vd")
+
+          c = sub(c, "      presentation = new Presentation(getCarContext(), display);\n",
+                  "      presentation = new Presentation(getCarContext(), display);\n      try { presentation.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED); } catch (Throwable ignored) {}\n", "hw")
+
+          c = sub(c, "Log.e(\"AmeerCarWeb\", \"Failed to attach WebView to car surface\", t); detach(); }",
+                  "Log.e(\"AmeerCarWeb\", \"Failed to attach WebView to car surface\", t); startupError = \"attach: \" + t; detach(); main.post(() -> { try { invalidate(); } catch (Throwable ignored) {} }); }", "catch")
+
+          old_tpl = "  @Override public Template onGetTemplate() {\n    return new NavigationTemplate.Builder()"
+          new_tpl = ("  @Override public Template onGetTemplate() {\n"
+                     "    try {\n"
+                     "      if (startupError != null) {\n"
+                     "        return new MessageTemplate.Builder(\"Ameer Screens error:\\n\" + startupError).setTitle(\"Ameer Screens\").build();\n"
+                     "      }\n"
+                     "      return buildNavTemplate();\n"
+                     "    } catch (Throwable t) {\n"
+                     "      Log.e(\"AmeerCarWeb\", \"onGetTemplate failed\", t);\n"
+                     "      return new MessageTemplate.Builder(\"Ameer Screens error:\\n\" + t).setTitle(\"Ameer Screens\").build();\n"
+                     "    }\n"
+                     "  }\n\n"
+                     "  private Template buildNavTemplate() {\n    return new NavigationTemplate.Builder()")
+          c = sub(c, old_tpl, new_tpl, "template")
+          p.write_text(c, encoding="utf-8")
+          print("patched OK")
+          PY
+
+      - name: Validate original interface JavaScript
+        working-directory: extracted/car-screens-main
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
           html = Path("app/src/main/assets/index.html").read_text()
           scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
-          if scripts:
-              Path("/tmp/lolo-check.js").write_text("\n".join(scripts))
+          if not scripts:
+              raise SystemExit("No JavaScript found in index.html")
+          Path("/tmp/ameer-index-check.js").write_text("\n".join(scripts))
           PY
-          if [ -f /tmp/lolo-check.js ]; then node --check /tmp/lolo-check.js; fi
+          node --check /tmp/ameer-index-check.js
+
       - name: Build APK
+        working-directory: extracted/car-screens-main
         run: gradle :app:assembleDebug
-      - name: Upload Android Auto diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: Lolo-Diagnostics
-          path: /tmp/lolo-diagnostic.txt
-          if-no-files-found: error
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lolo-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: Ameer-Screens-APK
+          path: extracted/car-screens-main/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
