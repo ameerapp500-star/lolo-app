@@ -32,12 +32,13 @@ jobs:
           from pathlib import Path
           p = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
           s = p.read_text()
-          if s.count("\\n") < 10 and s.count("\\\\n") > 10:
-              s = s.replace("\\\\r\\\\n", "\n").replace("\\\\n", "\n")
-          if s.count("\\n") < 10 and s.count("\\n") > 10:
-              s = s.replace("\\r\\n", "\n").replace("\\n", "\n")
+          if s.count(chr(10)) < 10:
+              s = s.replace(chr(92)*2+"r"+chr(92)*2+"n", chr(10))
+              s = s.replace(chr(92)*2+"n", chr(10))
+              s = s.replace(chr(92)+"r"+chr(92)+"n", chr(10))
+              s = s.replace(chr(92)+"n", chr(10))
           p.write_text(s)
-          print(f"Normalized {p}: {s.count(chr(10))} real lines, {s.count(chr(92)+'n')} literal newline escapes")
+          print("Java source lines:", s.count(chr(10)), "literal escapes:", s.count(chr(92)+"n"))
           PY
       - name: Capture Android Auto source diagnostics
         run: python3 patches/diagnose_lolo.py
