@@ -607,7 +607,7 @@ car_source = car_source.replace(old_surface_flags, "surfaceDpi, surface, 0);", 1
 Path(car_screen_path).write_text(car_source)
 print("Restored original car UI and corrected Android Auto surface flags")
 
-// Harden the Android Auto surface lifecycle: serialize callbacks on the main
+# Harden Android Auto surface lifecycle
 # thread, ignore stale destroy callbacks, and avoid tearing down a newer surface.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 patch_if_present(car_screen_path,
