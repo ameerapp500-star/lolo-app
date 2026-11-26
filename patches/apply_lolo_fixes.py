@@ -606,3 +606,44 @@ if old_surface_flags not in car_source:
 car_source = car_source.replace(old_surface_flags, "surfaceDpi, surface, 0);", 1)
 Path(car_screen_path).write_text(car_source)
 print("Restored original car UI and corrected Android Auto surface flags")
+
+// Harden the Android Auto surface lifecycle: serialize callbacks on the main
+// thread, ignore stale destroy callbacks, and avoid tearing down a newer surface.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    """    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      current = c;
+      main.post(() -> attach(c));
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> detach());
+    }""",
+    """    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      main.post(() -> {
+        current = c;
+        Log.i("AmeerCarWeb", "Surface available: " + c.getWidth() + "x" + c.getHeight());
+        attach(c);
+      });
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> {
+        if (current != c) {
+          Log.i("AmeerCarWeb", "Ignoring stale surface-destroy callback");
+          return;
+        }
+        Log.i("AmeerCarWeb", "Active surface destroyed");
+        current = null;
+        detach();
+      });
+    }""")
+patch_if_present(car_screen_path,
+    """  private void attach(SurfaceContainer c) {
+    detach();
+    Surface surface = c.getSurface();""",
+    """  private void attach(SurfaceContainer c) {
+    if (current != c) {
+      Log.i("AmeerCarWeb", "Ignoring stale surface-available callback");
+      return;
+    }
+    detach();
+    Surface surface = c.getSurface();""")
