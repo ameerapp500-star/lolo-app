@@ -309,21 +309,6 @@ patch_if_present(car_screen_path,
 
 print("Android Auto media launcher registration applied for " + service_class)
 
-# Critical: Presentation requires a virtual display marked as PRESENTATION.
-# The source currently passes flags=0, so Presentation may reject the display
-# and Android Auto remains stuck on its loading/error screen. Fail the build
-# if this exact source context changes instead of silently skipping the fix.
-replace_once(
-    car_screen_path,
-    """      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", surfaceWidth, surfaceHeight,
-          surfaceDpi, surface, 0);""",
-    """      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", surfaceWidth, surfaceHeight,
-          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
-              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"""
-)
-
-
-
 # Allow the Android Auto host to bind to this debug APK during device testing.
 # Release builds keep the official Android Auto host signature allowlist.
 service_path = "app/src/main/java/com/carscreens/app/MapsCarAppService.java"
@@ -760,3 +745,18 @@ if "Ignoring stale surface-available callback" not in car_source:
     car_source = car_source.replace(attach_signature, guard_text, 1)
 Path(car_screen_path).write_text(car_source)
 print("Android Auto SurfaceContainer lifecycle serialized and stale callbacks ignored")
+
+# FINAL OVERRIDE: the legacy source-normalization block later resets flags to 0.
+# Reapply the Presentation flags AFTER every legacy patch so they cannot undo it.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+old_flags = "surfaceDpi, surface, 0);"
+new_flags = ("surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION\\n"
+             "              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);")
+if old_flags in car_source:
+    car_source = car_source.replace(old_flags, new_flags, 1)
+elif "surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION" not in car_source:
+    raise SystemExit("Final Android Auto Presentation flag correction could not locate createVirtualDisplay")
+Path(car_screen_path).write_text(car_source)
+print("FINAL Android Auto Presentation virtual-display flags applied")
+
