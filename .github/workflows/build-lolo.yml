@@ -26,6 +26,19 @@ jobs:
           cp /tmp/diagnose_lolo.py patches/diagnose_lolo.py
       - name: Apply requested Lolo fixes
         run: python3 patches/apply_lolo_fixes.py
+      - name: Normalize escaped Java source line endings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+          s = p.read_text()
+          if s.count("\\n") < 10 and s.count("\\\\n") > 10:
+              s = s.replace("\\\\r\\\\n", "\n").replace("\\\\n", "\n")
+          if s.count("\\n") < 10 and s.count("\\n") > 10:
+              s = s.replace("\\r\\n", "\n").replace("\\n", "\n")
+          p.write_text(s)
+          print(f"Normalized {p}: {s.count(chr(10))} real lines, {s.count(chr(92)+'n')} literal newline escapes")
+          PY
       - name: Capture Android Auto source diagnostics
         run: python3 patches/diagnose_lolo.py
       - name: Set up Java
