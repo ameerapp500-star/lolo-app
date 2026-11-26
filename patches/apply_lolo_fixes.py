@@ -538,17 +538,17 @@ patch_if_present(car_screen_path,
 
 
 
-// Android Auto must enter the native Car App Library menu instead of the
-// custom WebView-on-virtual-display renderer. The latter is the endless
+# Android Auto must enter the native Car App Library menu instead of the
+# custom WebView-on-virtual-display renderer. The latter is the endless
 // loading screen reported on the vehicle head unit. Keep the phone activity
-// and its existing HTML UI untouched.
+# and its existing HTML UI untouched.
 service_path = "app/src/main/java/com/carscreens/app/MapsCarAppService.java"
 patch_if_present(service_path,
     "return new CarWebScreen(getCarContext());",
     "return new HomeScreen(getCarContext());")
 
-// Replace the placeholder warning with a clear native section landing list.
-// All navigation remains within supported Car App Library templates.
+# Replace the placeholder warning with a clear native section landing list.
+# All navigation remains within supported Car App Library templates.
 service_source = Path(service_path).read_text()
 old_section = '''      list.addItem(new Row.Builder()
         .setTitle(title)
