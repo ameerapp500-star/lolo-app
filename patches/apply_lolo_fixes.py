@@ -751,8 +751,7 @@ print("Android Auto SurfaceContainer lifecycle serialized and stale callbacks ig
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
 old_flags = "surfaceDpi, surface, 0);"
-new_flags = ("surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION\\n"
-             "              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);")
+new_flags = "surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"
 if old_flags in car_source:
     car_source = car_source.replace(old_flags, new_flags, 1)
 elif "surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION" not in car_source:
