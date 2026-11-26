@@ -343,3 +343,62 @@ patch_if_present(car_screen_path,
 playerView = new PlayerView(getCarContext());""",
     """root = new FrameLayout(displayContext);
 playerView = new PlayerView(displayContext);""")
+
+
+# Surface rendering fix: make the Android Auto virtual display render its own
+# Presentation content instead of mirroring the phone's default display.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    """    Surface surface = c.getSurface();
+    if (surface == null || !surface.isValid()) return;
+    try {
+      DisplayManager dm = (DisplayManager) getCarContext().getSystemService(Context.DISPLAY_SERVICE);
+      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", c.getWidth(), c.getHeight(),
+          c.getDpi(), surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION);""",
+    """    Surface surface = c.getSurface();
+    final int surfaceWidth = c.getWidth();
+    final int surfaceHeight = c.getHeight();
+    final int surfaceDpi = c.getDpi();
+    if (surface == null || !surface.isValid()
+        || surfaceWidth <= 0 || surfaceHeight <= 0 || surfaceDpi <= 0) {
+      Log.w("AmeerCarWeb", "Car surface is not ready: surface=" + (surface != null && surface.isValid())
+          + ", size=" + surfaceWidth + "x" + surfaceHeight + ", dpi=" + surfaceDpi);
+      return;
+    }
+    try {
+      DisplayManager dm = (DisplayManager) getCarContext().getSystemService(Context.DISPLAY_SERVICE);
+      virtualDisplay = dm.createVirtualDisplay("AmeerScreensCar", surfaceWidth, surfaceHeight,
+          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);""")
+patch_if_present(car_screen_path,
+    """      if (virtualDisplay == null) return;
+      Display display = virtualDisplay.getDisplay();""",
+    """      if (virtualDisplay == null) {
+        Log.e("AmeerCarWeb", "createVirtualDisplay returned null");
+        return;
+      }
+      Display display = virtualDisplay.getDisplay();
+      Log.i("AmeerCarWeb", "Car virtual display created: " + surfaceWidth + "x" + surfaceHeight
+          + " dpi=" + surfaceDpi + " display=" + display.getDisplayId());""")
+patch_if_present(car_screen_path,
+    """        @Override public void onPageFinished(WebView view, String url) {
+          super.onPageFinished(view, url);
+          installCarKeyboard(view);
+        }""",
+    """        @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+          super.onPageStarted(view, url, favicon);
+          Log.i("AmeerCarWeb", "Car WebView loading: " + url);
+        }
+        @Override public void onPageFinished(WebView view, String url) {
+          super.onPageFinished(view, url);
+          Log.i("AmeerCarWeb", "Car WebView finished: " + url);
+          installCarKeyboard(view);
+        }
+        @Override public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                                              android.webkit.WebResourceError error) {
+          super.onReceivedError(view, request, error);
+          if (request.isForMainFrame()) {
+            Log.e("AmeerCarWeb", "Car WebView main-frame error: " + error.getErrorCode()
+                + " " + error.getDescription() + " url=" + request.getUrl());
+          }
+        }""")
