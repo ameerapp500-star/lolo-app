@@ -41,11 +41,14 @@ jobs:
           fi
           echo "Using $Z"
           unzip -q "$Z" -d extracted
-          S=$(find extracted -name settings.gradle | head -1)
+          S=$(find extracted -name settings.gradle | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2-)
           [ -z "$S" ] && { echo "ERROR: settings.gradle not found inside zip"; find extracted | head -50; exit 1; }
           D=$(dirname "$S")
           if [ "$D" != "extracted/car-screens-main" ]; then
-            mv "$D" extracted/_proj && rm -rf extracted/car-screens-main && mv extracted/_proj extracted/car-screens-main
+            rm -rf _proj && mkdir _proj
+            cp -a "$D"/. _proj/
+            rm -rf extracted && mkdir extracted
+            mv _proj extracted/car-screens-main
           fi
           ls extracted/car-screens-main
 
