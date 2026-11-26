@@ -762,3 +762,71 @@ if count == 0 and "surfaceDpi, surface, 0);" not in car_source:
     raise SystemExit("Could not enforce documented Android Auto virtual-display flags=0")
 Path(car_screen_path).write_text(car_source)
 print("FINAL Android Auto VirtualDisplay flags=0 applied (official Android for Cars pattern)")
+
+
+# Final Android Auto callback scheduling correction.
+
+# AppManager dispatches SurfaceCallback UI events on the main thread.
+# Do not defer surface attach/detach: the host may invalidate the supplied
+# Surface before a posted attach runs, leaving the car screen permanently blank.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+old_callback = """    private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+      @Override public void onSurfaceAvailable(SurfaceContainer c) {
+        main.post(() -> {
+          current = c;
+          Log.i("AmeerCarWeb", "Surface available: " + c.getWidth() + "x" + c.getHeight());
+          attach(c);
+        });
+      }
+      @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+        main.post(() -> {
+          if (current != c) {
+            Log.i("AmeerCarWeb", "Ignoring stale surface-destroy callback");
+            return;
+          }
+          Log.i("AmeerCarWeb", "Active surface destroyed");
+          current = null;
+          detach();
+        });
+      }
+      @Override public void onClick(float x, float y) {
+        main.post(() -> dispatchTap(x, y));
+      }
+      @Override public void onScroll(float dx, float dy) {
+        main.post(() -> scrollContent(dx, dy));
+      }
+      @Override public void onFling(float vx, float vy) {
+        main.post(() -> flingContent(vx, vy));
+      }
+    };"""
+new_callback = """    private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+      @Override public void onSurfaceAvailable(SurfaceContainer c) {
+        current = c;
+        Log.i("AmeerCarWeb", "Surface available on main thread: " + c.getWidth() + "x" + c.getHeight());
+        attach(c);
+      }
+      @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+        if (current != c) {
+          Log.i("AmeerCarWeb", "Ignoring stale surface-destroy callback");
+          return;
+        }
+        Log.i("AmeerCarWeb", "Active surface destroyed on main thread");
+        current = null;
+        detach();
+      }
+      @Override public void onClick(float x, float y) {
+        main.post(() -> dispatchTap(x, y));
+      }
+      @Override public void onScroll(float dx, float dy) {
+        main.post(() -> scrollContent(dx, dy));
+      }
+      @Override public void onFling(float vx, float vy) {
+        main.post(() -> flingContent(vx, vy));
+      }
+    };"""
+if old_callback not in car_source:
+    raise SystemExit("Expected SurfaceCallback block not found; refusing unsafe edit")
+car_source = car_source.replace(old_callback, new_callback, 1)
+Path(car_screen_path).write_text(car_source)
+print("Surface attach/detach now runs synchronously on the documented main thread")
