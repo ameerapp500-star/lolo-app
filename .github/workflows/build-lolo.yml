@@ -31,7 +31,15 @@ jobs:
           gradle-version: '8.9'
 
       - name: Extract new project
-        run: unzip -q ameer-screens-android-auto-ui-update.zip -d extracted
+        run: |
+          Z=$(find . -type f -name 'ameer-screens-android-auto-ui-update.zip' | head -1)
+          if [ -z "$Z" ]; then
+            echo "ERROR: ameer-screens-android-auto-ui-update.zip is not in the repository. Files found:"
+            find . -name '*.zip' -not -path './.git/*'
+            exit 1
+          fi
+          echo "Using $Z"
+          unzip -q "$Z" -d extracted
 
       - name: Upload extracted source for inspection
         uses: actions/upload-artifact@v4
