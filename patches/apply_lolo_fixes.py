@@ -1,5 +1,15 @@
 from pathlib import Path
 
+# The supplied source archive may contain CarWebScreen.java as one escaped
+# text line (literal \\n sequences) instead of real line breaks. Normalize
+# only that malformed representation before applying Java source patches.
+car_source_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
+if car_source_path.exists():
+    raw_car_source = car_source_path.read_text()
+    if raw_car_source.count("\n") < 10 and raw_car_source.count("\\\\n") > 10:
+        raw_car_source = raw_car_source.replace("\\\\r\\\\n", "\n").replace("\\\\n", "\n")
+        car_source_path.write_text(raw_car_source)
+
 def replace_once(path, old, new):
     p = Path(path)
     s = p.read_text()
