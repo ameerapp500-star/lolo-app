@@ -581,3 +581,31 @@ if old_section in service_source:
 elif new_section not in service_source:
     raise SystemExit("Native section screen context not found")
 print("Native Android Auto menu entry enabled")
+
+
+# Restore the original Lolo HTML screen in Android Auto. The temporary native
+# placeholder menu was only diagnostic and must never replace the real UI.
+service_path = "app/src/main/java/com/carscreens/app/MapsCarAppService.java"
+service_source = Path(service_path).read_text()
+service_source = service_source.replace(
+    "return new HomeScreen(getCarContext());",
+    "return new CarWebScreen(getCarContext());",
+    1
+)
+Path(service_path).write_text(service_source)
+
+# Match the official Android for Cars virtual-display example: use flags=0.
+# The host Surface is already configured by Android Auto; adding PRESENTATION
+# and OWN_CONTENT_ONLY can prevent the supplied surface from displaying.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+car_source, surface_flags_count = re.subn(
+    r"(createVirtualDisplay\\(\\"AmeerScreensCar\\",\\s*surfaceWidth,\\s*surfaceHeight,\\s*\\n?\\s*surfaceDpi,\\s*surface,\\s*)DisplayManager\\.VIRTUAL_DISPLAY_FLAG_PRESENTATION\\s*\\|\\s*DisplayManager\\.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY(\\s*\\);)",
+    r"\\g<1>0\\g<2>",
+    car_source,
+    count=1
+)
+if surface_flags_count != 1:
+    raise SystemExit("Could not apply official Android Auto virtual-display flags=0 fix")
+Path(car_screen_path).write_text(car_source)
+print("Restored original car UI and corrected Android Auto surface flags")
