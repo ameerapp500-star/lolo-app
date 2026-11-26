@@ -402,3 +402,34 @@ patch_if_present(car_screen_path,
                 + " " + error.getDescription() + " url=" + request.getUrl());
           }
         }""")
+
+
+// Follow the official Android for Cars surface-rendering pattern.
+// The host-provided Surface is already a presentation target; use flags=0.
+// Release each Surface instance after its VirtualDisplay is detached.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    """          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);""",
+    """          surfaceDpi, surface, 0);""")
+patch_if_present(car_screen_path,
+    """  private SurfaceContainer current;
+  private VirtualDisplay virtualDisplay;""",
+    """  private SurfaceContainer current;
+  private Surface ownedSurface;
+  private VirtualDisplay virtualDisplay;""")
+patch_if_present(car_screen_path,
+    """    Surface surface = c.getSurface();
+    final int surfaceWidth = c.getWidth();""",
+    """    Surface surface = c.getSurface();
+    ownedSurface = surface;
+    final int surfaceWidth = c.getWidth();""")
+patch_if_present(car_screen_path,
+    """    try { if (virtualDisplay != null) virtualDisplay.release(); } catch (Exception ignored) {}
+    virtualDisplay = null;""",
+    """    try { if (virtualDisplay != null) virtualDisplay.release(); } catch (Exception ignored) {}
+    virtualDisplay = null;
+    try { if (ownedSurface != null) ownedSurface.release(); } catch (Exception ignored) {}
+    ownedSurface = null;""")
+
+print("Android Auto surface compatibility correction applied")
