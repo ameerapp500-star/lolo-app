@@ -404,9 +404,9 @@ patch_if_present(car_screen_path,
         }""")
 
 
-// Follow the official Android for Cars surface-rendering pattern.
-// The host-provided Surface is already a presentation target; use flags=0.
-// Release each Surface instance after its VirtualDisplay is detached.
+# Follow the official Android for Cars surface-rendering pattern.
+# The host-provided Surface is already a presentation target; use flags=0.
+# Release each Surface instance after its VirtualDisplay is detached.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 patch_if_present(car_screen_path,
     """          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
