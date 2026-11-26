@@ -7,7 +7,7 @@ car_source_path = Path("app/src/main/java/com/carscreens/app/CarWebScreen.java")
 if car_source_path.exists():
     raw_car_source = car_source_path.read_text()
     if raw_car_source.count("\n") < 10 and raw_car_source.count("\\n") > 10:
-        raw_car_source = raw_car_source.replace("\\r\\n", "\n").replace("\\n", "\n")
+        raw_car_source = raw_car_source.replace(chr(92)+"r"+chr(92)+"n", "\n").replace(chr(92)+"n", "\n")
         car_source_path.write_text(raw_car_source)
 
 def replace_once(path, old, new):
