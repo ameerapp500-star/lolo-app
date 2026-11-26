@@ -445,14 +445,13 @@ car_source = car_source.replace("    ownedSurface = surface;\\n", "")
 Path(car_screen_path).write_text(car_source)
 
 
-# Remove stale Surface ownership cleanup regardless of whitespace or indentation.
-import re
+# Remove stale host-owned Surface cleanup left in the source archive.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
-car_source = re.sub(r"(?m)^\\s*try \\{ if \\(ownedSurface != null\\) ownedSurface\\.release\\(\\); \\} catch \\(Exception ignored\\) \\{\\}\\s*\\n", "", car_source)
-car_source = re.sub(r"(?m)^\\s*ownedSurface = null;\\s*\\n", "", car_source)
-car_source = re.sub(r"(?m)^\\s*private Surface ownedSurface;\\s*\\n", "", car_source)
-car_source = re.sub(r"(?m)^\\s*ownedSurface = surface;\\s*\\n", "", car_source)
+car_source = "\\n".join(
+    line for line in car_source.splitlines()
+    if "ownedSurface" not in line
+) + "\\n"
 Path(car_screen_path).write_text(car_source)
 
 print("Android Auto surface compatibility correction applied")
