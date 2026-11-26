@@ -650,17 +650,18 @@ patch_if_present(car_screen_path,
 
 
 
+
 # Serialize Android Auto SurfaceContainer lifecycle on the main thread.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
-callback_start = car_source.find("  private final SurfaceCallback surfaceCallback")
+callback_start = car_source.find("private final SurfaceCallback surfaceCallback")
 if callback_start < 0:
     raise SystemExit("SurfaceCallback declaration missing")
-callback_end = car_source.find("\n  };", callback_start)
+callback_end = car_source.find("};", callback_start)
 if callback_end < 0:
     raise SystemExit("SurfaceCallback terminator missing")
-callback_end += len("\n  };")
-callback_block = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+callback_end += 2
+callback_block = """private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
     @Override public void onSurfaceAvailable(SurfaceContainer c) {
       main.post(() -> {
         current = c;
@@ -689,16 +690,21 @@ callback_block = """  private final SurfaceCallback surfaceCallback = new Surfac
       main.post(() -> flingContent(vx, vy));
     }
   };"""
+# Preserve indentation of the declaration in the original source.
+line_start = car_source.rfind("\n", 0, callback_start) + 1
+indent = car_source[line_start:callback_start]
+callback_block = "\n".join(indent + line if line else line for line in callback_block.split("\n"))
 car_source = car_source[:callback_start] + callback_block + car_source[callback_end:]
-attach_signature = "  private void attach(SurfaceContainer c) {"
-if attach_signature not in car_source:
+attach_signature = "private void attach(SurfaceContainer c) {"
+attach_at = car_source.find(attach_signature)
+if attach_at < 0:
     raise SystemExit("attach method missing")
-guard = """  private void attach(SurfaceContainer c) {
+guard_text = """private void attach(SurfaceContainer c) {
     if (current != c) {
       Log.i("AmeerCarWeb", "Ignoring stale surface-available callback");
       return;
     }"""
-if guard not in car_source:
-    car_source = car_source.replace(attach_signature, guard, 1)
+if "Ignoring stale surface-available callback" not in car_source:
+    car_source = car_source.replace(attach_signature, guard_text, 1)
 Path(car_screen_path).write_text(car_source)
 print("Android Auto SurfaceContainer lifecycle serialized and stale callbacks ignored")
