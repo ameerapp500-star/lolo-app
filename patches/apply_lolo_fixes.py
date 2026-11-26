@@ -649,19 +649,18 @@ patch_if_present(car_screen_path,
     Surface surface = c.getSurface();""")
 
 
-# Definitive surface callback ordering fix. All state changes are serialized
-# on the main thread; stale destroy callbacks cannot tear down a newer display.
+
+# Serialize Android Auto SurfaceContainer lifecycle on the main thread.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
-old_callbacks = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
-    @Override public void onSurfaceAvailable(SurfaceContainer c) {
-      current = c;
-      main.post(() -> attach(c));
-    }
-    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
-      main.post(() -> detach());
-    }"""
-new_callbacks = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+callback_start = car_source.find("  private final SurfaceCallback surfaceCallback")
+if callback_start < 0:
+    raise SystemExit("SurfaceCallback declaration missing")
+callback_end = car_source.find("\n  };", callback_start)
+if callback_end < 0:
+    raise SystemExit("SurfaceCallback terminator missing")
+callback_end += len("\n  };")
+callback_block = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
     @Override public void onSurfaceAvailable(SurfaceContainer c) {
       main.post(() -> {
         current = c;
@@ -679,24 +678,27 @@ new_callbacks = """  private final SurfaceCallback surfaceCallback = new Surface
         current = null;
         detach();
       });
-    }"""
-if old_callbacks in car_source:
-    car_source = car_source.replace(old_callbacks, new_callbacks, 1)
-elif new_callbacks not in car_source:
-    raise SystemExit("Surface callback block did not match expected source")
-old_attach = """  private void attach(SurfaceContainer c) {
-    detach();
-    Surface surface = c.getSurface();"""
-new_attach = """  private void attach(SurfaceContainer c) {
+    }
+    @Override public void onClick(float x, float y) {
+      main.post(() -> dispatchTap(x, y));
+    }
+    @Override public void onScroll(float dx, float dy) {
+      main.post(() -> scrollContent(dx, dy));
+    }
+    @Override public void onFling(float vx, float vy) {
+      main.post(() -> flingContent(vx, vy));
+    }
+  };"""
+car_source = car_source[:callback_start] + callback_block + car_source[callback_end:]
+attach_signature = "  private void attach(SurfaceContainer c) {"
+if attach_signature not in car_source:
+    raise SystemExit("attach method missing")
+guard = """  private void attach(SurfaceContainer c) {
     if (current != c) {
       Log.i("AmeerCarWeb", "Ignoring stale surface-available callback");
       return;
-    }
-    detach();
-    Surface surface = c.getSurface();"""
-if old_attach in car_source:
-    car_source = car_source.replace(old_attach, new_attach, 1)
-elif new_attach not in car_source:
-    raise SystemExit("Surface attach guard context missing")
+    }"""
+if guard not in car_source:
+    car_source = car_source.replace(attach_signature, guard, 1)
 Path(car_screen_path).write_text(car_source)
-print("Verified surface lifecycle callback ordering patch applied")
+print("Android Auto SurfaceContainer lifecycle serialized and stale callbacks ignored")
