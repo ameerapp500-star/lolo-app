@@ -746,16 +746,19 @@ if "Ignoring stale surface-available callback" not in car_source:
 Path(car_screen_path).write_text(car_source)
 print("Android Auto SurfaceContainer lifecycle serialized and stale callbacks ignored")
 
-# FINAL OVERRIDE: the legacy source-normalization block later resets flags to 0.
-# Reapply the Presentation flags AFTER every legacy patch so they cannot undo it.
+# FINAL OVERRIDE: follow Google's documented Android for Cars rendering pattern.
+# The host Surface is rendered through a VirtualDisplay + Presentation with flags=0.
+# Do not re-add PRESENTATION/OWN_CONTENT_ONLY here; that contradicted the official sample.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
-old_flags = "surfaceDpi, surface, 0);"
-new_flags = "surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"
-if old_flags in car_source:
-    car_source = car_source.replace(old_flags, new_flags, 1)
-elif "surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION" not in car_source:
-    raise SystemExit("Final Android Auto Presentation flag correction could not locate createVirtualDisplay")
+import re
+car_source, count = re.subn(
+    r"surfaceDpi, surface, DisplayManager\.VIRTUAL_DISPLAY_FLAG_PRESENTATION\s*\|\s*DisplayManager\.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY\);",
+    "surfaceDpi, surface, 0);",
+    car_source,
+    count=1
+)
+if count == 0 and "surfaceDpi, surface, 0);" not in car_source:
+    raise SystemExit("Could not enforce documented Android Auto virtual-display flags=0")
 Path(car_screen_path).write_text(car_source)
-print("FINAL Android Auto Presentation virtual-display flags applied")
-
+print("FINAL Android Auto VirtualDisplay flags=0 applied (official Android for Cars pattern)")
