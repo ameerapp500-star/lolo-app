@@ -651,8 +651,48 @@ patch_if_present(car_screen_path,
 
 
 
-# Serialize Android Auto SurfaceContainer lifecycle on the main thread.
+
+# Normalize the escaped Java file before inserting real source lines. The
+# following build step only normalizes files with fewer than ten real lines,
+# so this must happen before our lifecycle patch changes the line count.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+raw = Path(car_screen_path).read_text()
+if raw.count(chr(10)) < 10 and raw.count(chr(92) + "n") > 10:
+    out = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(raw):
+        ch = raw[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == chr(92):
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == chr(92) and i + 1 < len(raw):
+            if raw[i+1] == 'n':
+                out.append(chr(10))
+                i += 2
+                continue
+            if raw[i+1] == 'r' and i + 3 < len(raw) and raw[i+2] == chr(92) and raw[i+3] == 'n':
+                out.append(chr(10))
+                i += 4
+                continue
+        out.append(ch)
+        i += 1
+    raw = ''.join(out)
+    Path(car_screen_path).write_text(raw)
+
 car_source = Path(car_screen_path).read_text()
 callback_start = car_source.find("private final SurfaceCallback surfaceCallback")
 if callback_start < 0:
@@ -690,14 +730,12 @@ callback_block = """private final SurfaceCallback surfaceCallback = new SurfaceC
       main.post(() -> flingContent(vx, vy));
     }
   };"""
-# Preserve indentation of the declaration in the original source.
 line_start = car_source.rfind("\n", 0, callback_start) + 1
 indent = car_source[line_start:callback_start]
 callback_block = "\n".join(indent + line if line else line for line in callback_block.split("\n"))
 car_source = car_source[:callback_start] + callback_block + car_source[callback_end:]
 attach_signature = "private void attach(SurfaceContainer c) {"
-attach_at = car_source.find(attach_signature)
-if attach_at < 0:
+if attach_signature not in car_source:
     raise SystemExit("attach method missing")
 guard_text = """private void attach(SurfaceContainer c) {
     if (current != c) {
