@@ -599,13 +599,10 @@ Path(service_path).write_text(service_source)
 # and OWN_CONTENT_ONLY can prevent the supplied surface from displaying.
 car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
 car_source = Path(car_screen_path).read_text()
-car_source, surface_flags_count = re.subn(
-    r"(createVirtualDisplay\\(\\"AmeerScreensCar\\",\\s*surfaceWidth,\\s*surfaceHeight,\\s*\\n?\\s*surfaceDpi,\\s*surface,\\s*)DisplayManager\\.VIRTUAL_DISPLAY_FLAG_PRESENTATION\\s*\\|\\s*DisplayManager\\.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY(\\s*\\);)",
-    r"\\g<1>0\\g<2>",
-    car_source,
-    count=1
-)
-if surface_flags_count != 1:
-    raise SystemExit("Could not apply official Android Auto virtual-display flags=0 fix")
+old_surface_flags = """surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"""
+if old_surface_flags not in car_source:
+    raise SystemExit("Could not find Android Auto virtual-display flags")
+car_source = car_source.replace(old_surface_flags, "surfaceDpi, surface, 0);", 1)
 Path(car_screen_path).write_text(car_source)
 print("Restored original car UI and corrected Android Auto surface flags")
