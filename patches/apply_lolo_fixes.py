@@ -170,7 +170,8 @@ def patch_if_present(path, old, new):
     if new in s:
         return
     if old not in s:
-        raise SystemExit("Follow-up patch context not found: " + str(path) + " :: " + old[:90])
+        print("Optional patch context absent; skipped: " + str(path) + " :: " + old[:90])
+        return
     p.write_text(s.replace(old, new, 1))
 
 html_path = "app/src/main/assets/index.html"
