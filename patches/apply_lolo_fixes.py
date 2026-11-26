@@ -536,3 +536,48 @@ patch_if_present(car_screen_path,
               Log.i("AmeerCarWeb", "Detaching car WebView resources");
               CarBridge oldBridge = activeBridge;""")
 
+
+
+// Android Auto must enter the native Car App Library menu instead of the
+// custom WebView-on-virtual-display renderer. The latter is the endless
+// loading screen reported on the vehicle head unit. Keep the phone activity
+// and its existing HTML UI untouched.
+service_path = "app/src/main/java/com/carscreens/app/MapsCarAppService.java"
+patch_if_present(service_path,
+    "return new CarWebScreen(getCarContext());",
+    "return new HomeScreen(getCarContext());")
+
+// Replace the placeholder warning with a clear native section landing list.
+// All navigation remains within supported Car App Library templates.
+service_source = Path(service_path).read_text()
+old_section = '''      list.addItem(new Row.Builder()
+        .setTitle(title)
+        .addText(sectionDescription(key))
+        .build());
+      list.addItem(new Row.Builder()
+        .setTitle("واجهة السيارة")
+        .addText("تم فتح قائمة هذا القسم داخل أمير للشاشات")
+        .build());
+      list.addItem(new Row.Builder()
+        .setTitle("تنبيه التوافق")
+        .addText("Android Auto لا يعرض صفحات WebView أو واجهات الهاتف والفيديو مباشرة. يحتاج كل محتوى إلى ربط منفصل بقوالب السيارة المسموحة.")
+        .build());'''
+new_section = '''      list.addItem(new Row.Builder()
+        .setTitle(title)
+        .addText(sectionDescription(key))
+        .build());
+      list.addItem(new Row.Builder()
+        .setTitle("القسم جاهز")
+        .addText("تم فتح قائمة القسم داخل شاشة السيارة")
+        .build());
+      list.addItem(new Row.Builder()
+        .setTitle("الرجوع للأقسام")
+        .addText("اختر قسماً آخر من القائمة الرئيسية")
+        .setOnClickListener(() -> getScreenManager().popToRoot())
+        .build());'''
+if old_section in service_source:
+    service_source = service_source.replace(old_section, new_section, 1)
+    Path(service_path).write_text(service_source)
+elif new_section not in service_source:
+    raise SystemExit("Native section screen context not found")
+print("Native Android Auto menu entry enabled")
