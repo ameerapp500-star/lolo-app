@@ -433,3 +433,73 @@ patch_if_present(car_screen_path,
     ownedSurface = null;""")
 
 print("Android Auto surface compatibility correction applied")
+
+# Final surface lifecycle correction:
+# SurfaceContainer.getSurface() belongs to the Android Auto host. Never release
+# that Surface from the app. Also ignore late destroy callbacks for an older
+# container so they cannot tear down a newer active car display.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+patch_if_present(car_screen_path,
+    """          surfaceDpi, surface, 0);""",
+    """          surfaceDpi, surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);""")
+patch_if_present(car_screen_path,
+    """  private SurfaceContainer current;
+  private Surface ownedSurface;
+  private VirtualDisplay virtualDisplay;""",
+    """  private SurfaceContainer current;
+  private VirtualDisplay virtualDisplay;""")
+patch_if_present(car_screen_path,
+    """    Surface surface = c.getSurface();
+    ownedSurface = surface;
+    final int surfaceWidth = c.getWidth();""",
+    """    Surface surface = c.getSurface();
+    final int surfaceWidth = c.getWidth();""")
+patch_if_present(car_screen_path,
+    """    try { if (ownedSurface != null) ownedSurface.release(); } catch (Exception ignored) {}
+    ownedSurface = null;""",
+    "")
+patch_if_present(car_screen_path,
+    """    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      current = c;
+      main.post(() -> attach(c));
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> detach());
+    }""",
+    """    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      main.post(() -> {
+        current = c;
+        Log.i("AmeerCarWeb", "Surface available: " + c.getWidth() + "x" + c.getHeight());
+        attach(c);
+      });
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> {
+        if (current != c) {
+          Log.i("AmeerCarWeb", "Ignoring stale surface-destroy callback");
+          return;
+        }
+        Log.i("AmeerCarWeb", "Active surface destroyed");
+        current = null;
+        detach();
+      });
+    }""")
+patch_if_present(car_screen_path,
+    """  private void attach(SurfaceContainer c) {
+    detach();
+    Surface surface = c.getSurface();""",
+    """  private void attach(SurfaceContainer c) {
+    if (current != c) {
+      Log.i("AmeerCarWeb", "Ignoring stale surface-available callback");
+      return;
+    }
+    detach();
+    Surface surface = c.getSurface();""")
+patch_if_present(car_screen_path,
+    """  private void detach() {
+              CarBridge oldBridge = activeBridge;""",
+    """  private void detach() {
+              Log.i("AmeerCarWeb", "Detaching car WebView resources");
+              CarBridge oldBridge = activeBridge;""")
+
