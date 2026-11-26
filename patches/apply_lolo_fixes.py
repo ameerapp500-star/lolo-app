@@ -647,3 +647,56 @@ patch_if_present(car_screen_path,
     }
     detach();
     Surface surface = c.getSurface();""")
+
+
+# Definitive surface callback ordering fix. All state changes are serialized
+# on the main thread; stale destroy callbacks cannot tear down a newer display.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+old_callbacks = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      current = c;
+      main.post(() -> attach(c));
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> detach());
+    }"""
+new_callbacks = """  private final SurfaceCallback surfaceCallback = new SurfaceCallback() {
+    @Override public void onSurfaceAvailable(SurfaceContainer c) {
+      main.post(() -> {
+        current = c;
+        Log.i("AmeerCarWeb", "Surface available: " + c.getWidth() + "x" + c.getHeight());
+        attach(c);
+      });
+    }
+    @Override public void onSurfaceDestroyed(SurfaceContainer c) {
+      main.post(() -> {
+        if (current != c) {
+          Log.i("AmeerCarWeb", "Ignoring stale surface-destroy callback");
+          return;
+        }
+        Log.i("AmeerCarWeb", "Active surface destroyed");
+        current = null;
+        detach();
+      });
+    }"""
+if old_callbacks in car_source:
+    car_source = car_source.replace(old_callbacks, new_callbacks, 1)
+elif new_callbacks not in car_source:
+    raise SystemExit("Surface callback block did not match expected source")
+old_attach = """  private void attach(SurfaceContainer c) {
+    detach();
+    Surface surface = c.getSurface();"""
+new_attach = """  private void attach(SurfaceContainer c) {
+    if (current != c) {
+      Log.i("AmeerCarWeb", "Ignoring stale surface-available callback");
+      return;
+    }
+    detach();
+    Surface surface = c.getSurface();"""
+if old_attach in car_source:
+    car_source = car_source.replace(old_attach, new_attach, 1)
+elif new_attach not in car_source:
+    raise SystemExit("Surface attach guard context missing")
+Path(car_screen_path).write_text(car_source)
+print("Verified surface lifecycle callback ordering patch applied")
