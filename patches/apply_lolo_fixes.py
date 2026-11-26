@@ -432,6 +432,18 @@ patch_if_present(car_screen_path,
     try { if (ownedSurface != null) ownedSurface.release(); } catch (Exception ignored) {}
     ownedSurface = null;""")
 
+
+# Ensure no legacy code releases a host-owned Android Auto Surface.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+car_source = car_source.replace(
+    "    try { if (ownedSurface != null) ownedSurface.release(); } catch (Exception ignored) {}\\n",
+    ""
+).replace("    ownedSurface = null;\\n", "")
+car_source = car_source.replace("  private Surface ownedSurface;\\n", "")
+car_source = car_source.replace("    ownedSurface = surface;\\n", "")
+Path(car_screen_path).write_text(car_source)
+
 print("Android Auto surface compatibility correction applied")
 
 # Final surface lifecycle correction:
