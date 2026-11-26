@@ -49,25 +49,6 @@ jobs:
           fi
           ls extracted/car-screens-main
 
-      - name: Safe Android Auto fixes
-        working-directory: extracted/car-screens-main
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          m = Path("app/src/main/AndroidManifest.xml")
-          x = m.read_text()
-          x = re.sub(r'\s*android:permission="android\.permission\.BIND_MEDIA_BROWSER"', '', x)
-          m.write_text(x)
-          f = Path("app/src/main/java/com/carscreens/app/MapsCarAppService.java")
-          j = f.read_text()
-          old = "return new CarWebScreen(getCarContext());"
-          new = "try { return new CarWebScreen(getCarContext()); } catch (Throwable t) { android.util.Log.e(\"AmeerCar\", \"CarWebScreen failed\", t); return new HomeScreen(getCarContext()); }"
-          if old in j:
-              f.write_text(j.replace(old, new, 1))
-          print("safe fixes applied")
-          PY
-
       - name: Validate web interface JavaScript
         working-directory: extracted/car-screens-main
         run: |
