@@ -49,6 +49,11 @@ jobs:
           fi
           ls extracted/car-screens-main
 
+      - name: Apply Lolo fixes to extracted source
+        working-directory: extracted/car-screens-main
+        run: |
+          python3 "$GITHUB_WORKSPACE/patches/apply_lolo_fixes.py"
+
       - name: Validate web interface JavaScript
         working-directory: extracted/car-screens-main
         run: |
