@@ -37,7 +37,7 @@ start = s.index("// Files (multiple saved folders)")
 end = s.index("// Launch other apps", start)
 manager = r'''// File manager: independently assign one or more folders to each app section.
 let FP=[];
-const FOLDER_TARGETS=[['movies','الأفلام'],['tv','التلفزيون'],['web','المتصفح'],['yt','يوتيوب'],['radio','الراديو'],['photos','الصور'],['video','الفيديو'],['files','مدير الملفات'],['news','الأخبار'],['music','الموسيقى'],['kids','أطفال'],['apps','التطبيقات'],['mirror','عرض الشاشة'],['set','الإعدادات']];
+const FOLDER_TARGETS=[['movies','الأفلام'],['tv','التلفزيون'],['web','المتصفح'],['yt','يوتيوب'],['radio','الراديو'],['photos','الصور'],['video','الفيديو'],['files','مدير الملفات'],['news','الأخبار'],['music','الموسيقى'],['kids','أطفال'],['m3u','ملفات M3U'],['apps','التطبيقات'],['mirror','عرض الشاشة'],['set','الإعدادات']];
 function folderAssignments(){try{return JSON.parse(A.folderAssignments?A.folderAssignments():'{}')}catch(e){return {}}}
 function saveFolderAssignment(key,uri,on){const a=folderAssignments();a[key]=Array.isArray(a[key])?a[key]:[];const i=a[key].indexOf(uri);if(on&&i<0)a[key].push(uri);if(!on&&i>=0)a[key].splice(i,1);if(A.saveFolderAssignments)A.saveFolderAssignments(JSON.stringify(a));}
 function fshow(){
@@ -100,11 +100,11 @@ new = '''  private void launchM3uPicker() {
       i.addCategory(Intent.CATEGORY_OPENABLE);
       i.setType("*/*");
       i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/x-mpegURL", "audio/x-mpegurl", "application/vnd.apple.mpegurl", "text/plain"});
-      // Open the first folder assigned to the TV icon, when available.
+      // Open the first folder assigned specifically to the M3U picker, independently of TV folders.
       try {
         String saved = getSharedPreferences("folder_assignments", MODE_PRIVATE).getString("map", "{}");
         JSONObject all = new JSONObject(saved);
-        JSONArray tvFolders = all.optJSONArray("tv");
+        JSONArray tvFolders = all.optJSONArray("m3u");
         if (tvFolders != null && tvFolders.length() > 0) {
           Uri tree = Uri.parse(tvFolders.getString(0));
           String docId = DocumentsContract.getTreeDocumentId(tree);
