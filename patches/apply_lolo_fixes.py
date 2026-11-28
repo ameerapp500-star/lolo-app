@@ -830,3 +830,33 @@ if old_callback not in car_source:
 car_source = car_source.replace(old_callback, new_callback, 1)
 Path(car_screen_path).write_text(car_source)
 print("Surface attach/detach now runs synchronously on the documented main thread")
+
+# FINAL CORRECTION: Presentation.show() requires Display.FLAG_PRESENTATION.
+# Build 60 forced flags=0, which creates a non-presentation virtual display.
+# Android throws InvalidDisplayException when Presentation.show() is called on it.
+car_screen_path = "app/src/main/java/com/carscreens/app/CarWebScreen.java"
+car_source = Path(car_screen_path).read_text()
+old_flags = "surfaceDpi, surface, 0);"
+new_flags = """surfaceDpi, surface,
+          DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+              | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);"""
+if old_flags in car_source:
+    car_source = car_source.replace(old_flags, new_flags, 1)
+elif "DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION" not in car_source:
+    raise SystemExit("Could not find VirtualDisplay flags=0 or existing PRESENTATION flag")
+display_check = """      Display display = virtualDisplay.getDisplay();
+      Log.i("AmeerCarWeb", "Car virtual display created: " + surfaceWidth + "x" + surfaceHeight
+          + " dpi=" + surfaceDpi + " display=" + display.getDisplayId());"""
+display_check_new = """      Display display = virtualDisplay.getDisplay();
+      Log.i("AmeerCarWeb", "Car virtual display created: " + surfaceWidth + "x" + surfaceHeight
+          + " dpi=" + surfaceDpi + " display=" + display.getDisplayId()
+          + " flags=" + display.getFlags());
+      if ((display.getFlags() & Display.FLAG_PRESENTATION) == 0) {
+        throw new IllegalStateException("Virtual display missing FLAG_PRESENTATION; flags=" + display.getFlags());
+      }"""
+if display_check in car_source:
+    car_source = car_source.replace(display_check, display_check_new, 1)
+elif "Virtual display missing FLAG_PRESENTATION" not in car_source:
+    raise SystemExit("Could not add presentation-display validation")
+Path(car_screen_path).write_text(car_source)
+print("Corrected VirtualDisplay flags and added FLAG_PRESENTATION validation")
