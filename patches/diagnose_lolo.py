@@ -7,7 +7,7 @@ for p in sorted(root.rglob("*")):
         continue
     try: s = p.read_text(errors="replace")
     except Exception: continue
-    if p.name == "AndroidManifest.xml" or p.name == "index.html" or re.search(r"MediaBrowserService|onLoadChildren|onGetRoot|MediaSession|CarAppService|onCreateSession|NavigationTemplate|ScreenManager", s):
+    if p.name == "AndroidManifest.xml" or p.name == "index.html" or re.search(r"MediaBrowserService|onLoadChildren|onGetRoot|MediaSession|CarAppService|onCreateSession|NavigationTemplate|ScreenManager|ameer_pick_m3u|pickM3uFile|folderAssignments|saveFolderAssignments|ACTION_OPEN_DOCUMENT|OPEN_DOCUMENT_TREE", s):
         out.append("\n\n===== " + str(p) + " =====\n" + s)
 Path("/tmp/lolo-diagnostic.txt").write_text("\n".join(out))
 print("Diagnostic source report generated:", len(out), "files")
