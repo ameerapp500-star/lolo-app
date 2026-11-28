@@ -54,6 +54,17 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/patches/apply_lolo_fixes.py"
 
+      - name: Generate Lolo source diagnostic
+        working-directory: extracted/car-screens-main
+        run: python3 "$GITHUB_WORKSPACE/patches/diagnose_lolo.py"
+
+      - name: Upload Lolo source diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lolo-Source-Diagnostic
+          path: /tmp/lolo-diagnostic.txt
+          if-no-files-found: error
+
       - name: Validate web interface JavaScript
         working-directory: extracted/car-screens-main
         run: |
